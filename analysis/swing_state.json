@@ -1,1 +1,8 @@
-{}
+{
+  "JNJ": {
+    "entryDate": "2026-07-07",
+    "hi": 269.395,
+    "stop": 252.35,
+    "stopOrderId": null
+  }
+}
