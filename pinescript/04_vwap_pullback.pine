@@ -1,0 +1,87 @@
+//@version=5
+// =============================================================================
+// STRATEGY 4: VWAP PULLBACK (trend + pullback to VWAP)
+// Timeframe: 5-minute charts. Very common intraday approach.
+// Idea: In an up-trend (price above VWAP and rising EMA), buy pullbacks that touch
+//       VWAP and then resume up. Mirror for shorts below VWAP.
+//       VWAP resets each session (anchored to the trading day).
+// =============================================================================
+strategy("04 VWAP Pullback",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.02,
+     slippage             = 2,
+     pyramiding           = 0)
+
+// ---------- Inputs ----------
+emaLen    = input.int(50,  "Trend EMA",            group="Signal")
+touchPct  = input.float(0.15,"Pullback proximity to VWAP (%)", group="Signal", step=0.05)
+confirm   = input.bool(true, "Require bullish/bearish confirm candle", group="Signal")
+
+atrLen    = input.int(14,  "ATR length",           group="Risk")
+atrStop   = input.float(1.5,"Stop = ATR x",        group="Risk", step=0.1)
+rr        = input.float(2.0,"Reward:Risk (TP)",    group="Risk", step=0.1)
+riskPct   = input.float(1.5,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev    = input.float(1.0,"Max leverage (notional / equity)", group="Risk", step=0.5)
+
+useSession= input.bool(true, "Intraday only (auto-close at session end)", group="Session")
+sess      = input.session("0930-1545","Session (exchange tz)", group="Session")
+tz        = input.string("America/New_York","Timezone", group="Session")
+allowLong = input.bool(true, "Allow Longs",  group="Direction")
+allowShort= input.bool(true, "Allow Shorts", group="Direction")
+
+// ---------- Indicators ----------
+vwapVal = ta.vwap(hlc3)
+ema     = ta.ema(close, emaLen)
+atr     = ta.atr(atrLen)
+
+// ---------- Session ----------
+inSess  = not na(time(timeframe.period, sess, tz))
+canTrade= useSession ? inSess : true
+sessEnd = useSession and inSess[1] and not inSess
+
+// ---------- Logic ----------
+upTrend   = close > vwapVal and ema > ema[1]
+downTrend = close < vwapVal and ema < ema[1]
+
+nearVwap  = math.abs(low  - vwapVal) / vwapVal * 100 <= touchPct
+nearVwapU = math.abs(high - vwapVal) / vwapVal * 100 <= touchPct
+
+bullConfirm = not confirm or close > open
+bearConfirm = not confirm or close < open
+
+longSig  = allowLong  and upTrend   and nearVwap  and bullConfirm and close > vwapVal
+shortSig = allowShort and downTrend and nearVwapU and bearConfirm and close < vwapVal
+
+// ---------- Sizing ----------
+stopDist = atr * atrStop
+riskCash = strategy.equity * (riskPct / 100.0)
+qtyRisk  = stopDist > 0 ? riskCash / stopDist : 0
+qtyCap   = close > 0 ? (strategy.equity * maxLev) / close : 0   // never over-leverage
+qty      = math.min(qtyRisk, qtyCap)
+
+if canTrade and qty > 0
+    if longSig and strategy.position_size == 0
+        strategy.entry("L", strategy.long, qty=qty)
+    if shortSig and strategy.position_size == 0
+        strategy.entry("S", strategy.short, qty=qty)
+
+longStop  = strategy.position_avg_price - stopDist
+longTP    = strategy.position_avg_price + stopDist * rr
+shortStop = strategy.position_avg_price + stopDist
+shortTP   = strategy.position_avg_price - stopDist * rr
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", from_entry="L", stop=longStop, limit=longTP)
+if strategy.position_size < 0
+    strategy.exit("S-exit", from_entry="S", stop=shortStop, limit=shortTP)
+
+if sessEnd
+    strategy.close_all(comment="EOD flat")
+
+// ---------- Plots ----------
+plot(vwapVal, "VWAP", color=color.new(color.purple, 0), linewidth=2)
+plot(ema,     "EMA",  color=color.new(color.orange, 0))
+bgcolor(useSession and not inSess ? color.new(color.gray, 92) : na)

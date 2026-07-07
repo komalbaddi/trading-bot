@@ -1,0 +1,107 @@
+//@version=5
+// =============================================================================
+// STRATEGY 5: WILLIAMS ALLIGATOR + VOLUME
+// Timeframe: 5-minute charts.
+// Idea: Bill Williams' Alligator uses 3 smoothed, displaced moving averages:
+//       Jaw (13,8), Teeth (8,5), Lips (5,3). When they fan out in order and price
+//       trends, the "alligator is eating". Enter in the fan direction, but ONLY
+//       when volume confirms (volume > its moving average) to avoid weak breakouts.
+// =============================================================================
+strategy("05 Alligator + Volume",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.02,
+     slippage             = 2,
+     pyramiding           = 0)
+
+// ---------- Inputs ----------
+jawLen    = input.int(13, "Jaw length",   group="Alligator")
+jawOff    = input.int(8,  "Jaw offset",   group="Alligator")
+teethLen  = input.int(8,  "Teeth length", group="Alligator")
+teethOff  = input.int(5,  "Teeth offset", group="Alligator")
+lipsLen   = input.int(5,  "Lips length",  group="Alligator")
+lipsOff   = input.int(3,  "Lips offset",  group="Alligator")
+
+volLen    = input.int(20, "Volume MA length",     group="Volume")
+volMult   = input.float(1.2,"Volume must exceed MA x", group="Volume", step=0.1)
+
+atrLen    = input.int(14, "ATR length",           group="Risk")
+atrStop   = input.float(1.5,"Stop = ATR x",       group="Risk", step=0.1)
+rr        = input.float(2.0,"Reward:Risk (TP)",   group="Risk", step=0.1)
+riskPct   = input.float(1.5,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev    = input.float(1.0,"Max leverage (notional / equity)", group="Risk", step=0.5)
+
+useSession= input.bool(true, "Intraday only (auto-close at session end)", group="Session")
+sess      = input.session("0930-1545","Session (exchange tz)", group="Session")
+tz        = input.string("America/New_York","Timezone", group="Session")
+allowLong = input.bool(true, "Allow Longs",  group="Direction")
+allowShort= input.bool(true, "Allow Shorts", group="Direction")
+
+// ---------- Alligator (SMMA / RMA, displaced forward) ----------
+jaw   = ta.rma(hl2, jawLen)
+teeth = ta.rma(hl2, teethLen)
+lips  = ta.rma(hl2, lipsLen)
+
+// displaced series for current-bar comparison
+jawD   = jaw[jawOff]
+teethD = teeth[teethOff]
+lipsD  = lips[lipsOff]
+
+// ---------- Volume filter ----------
+volMa     = ta.sma(volume, volLen)
+volOK     = volume > volMa * volMult
+
+// ---------- Indicators ----------
+atr       = ta.atr(atrLen)
+
+// ---------- Session ----------
+inSess  = not na(time(timeframe.period, sess, tz))
+canTrade= useSession ? inSess : true
+sessEnd = useSession and inSess[1] and not inSess
+
+// ---------- Signals ----------
+// Bullish fan: Lips > Teeth > Jaw and price above lips (mouth opening up)
+bullFan = lipsD > teethD and teethD > jawD and close > lipsD
+bearFan = lipsD < teethD and teethD < jawD and close < lipsD
+
+longSig  = allowLong  and bullFan and not bullFan[1] and volOK   // first bar of bull fan
+shortSig = allowShort and bearFan and not bearFan[1] and volOK
+
+// ---------- Sizing ----------
+stopDist = atr * atrStop
+riskCash = strategy.equity * (riskPct / 100.0)
+qtyRisk  = stopDist > 0 ? riskCash / stopDist : 0
+qtyCap   = close > 0 ? (strategy.equity * maxLev) / close : 0   // never over-leverage
+qty      = math.min(qtyRisk, qtyCap)
+
+if canTrade and qty > 0
+    if longSig and strategy.position_size == 0
+        strategy.entry("L", strategy.long, qty=qty)
+    if shortSig and strategy.position_size == 0
+        strategy.entry("S", strategy.short, qty=qty)
+
+// exit when fan closes (alligator "sleeps") or stop/target hit
+longStop  = strategy.position_avg_price - stopDist
+longTP    = strategy.position_avg_price + stopDist * rr
+shortStop = strategy.position_avg_price + stopDist
+shortTP   = strategy.position_avg_price - stopDist * rr
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", from_entry="L", stop=longStop, limit=longTP)
+    if not bullFan
+        strategy.close("L", comment="fan closed")
+if strategy.position_size < 0
+    strategy.exit("S-exit", from_entry="S", stop=shortStop, limit=shortTP)
+    if not bearFan
+        strategy.close("S", comment="fan closed")
+
+if sessEnd
+    strategy.close_all(comment="EOD flat")
+
+// ---------- Plots ----------
+plot(jawD,   "Jaw (13,8)",   color=color.new(color.blue,   0), offset=0)
+plot(teethD, "Teeth (8,5)",  color=color.new(color.red,    0), offset=0)
+plot(lipsD,  "Lips (5,3)",   color=color.new(color.green,  0), offset=0)
+bgcolor(useSession and not inSess ? color.new(color.gray, 92) : na)

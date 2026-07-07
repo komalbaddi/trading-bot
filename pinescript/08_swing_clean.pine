@@ -1,0 +1,86 @@
+//@version=5
+// =============================================================================
+// STRATEGY 8: CLEAN DAILY SWING  (EMA 20/50/200 + fixed chandelier trail)
+// A cleaned-up, corrected Daily swing strategy. Long-only, trend-following.
+//
+// TWO FIXES baked in (these caused the earlier -94%):
+//   1) Trailing stop uses the highest high SINCE ENTRY (not the last N bars),
+//      so it gives the trade room instead of stopping out instantly.
+//   2) Backtest DATE FILTER defaults ON from 2015 — prevents testing on 1980s
+//      split-adjusted penny prices where 1-tick slippage destroys results.
+//
+// Use on the DAILY chart. Compare its return to "Buy & Hold" in the tester.
+// =============================================================================
+strategy("08 Clean Daily Swing",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.0,      // Alpaca US stocks are commission-free
+     slippage             = 1,
+     pyramiding           = 0)
+
+// ---------- Inputs ----------
+emaFast  = input.int(20,  "Fast EMA (pullback line)", group="Signal")
+emaMid   = input.int(50,  "Mid EMA (exit line)",      group="Signal")
+emaTrend = input.int(200, "Trend EMA (regime filter)",group="Signal")
+pullTol  = input.float(2.0,"Pullback within % of fast EMA", group="Signal", step=0.25)
+
+atrLen   = input.int(14,  "ATR length",               group="Risk")
+atrInit  = input.float(2.5,"Initial stop = ATR x",    group="Risk", step=0.1)
+chMult   = input.float(3.0,"Trailing stop = ATR x",   group="Risk", step=0.1)
+riskPct  = input.float(1.5,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev   = input.float(1.0,"Max leverage (notional / equity)", group="Risk", step=0.5)
+
+useDates = input.bool(true, "Limit backtest to realistic era (recommended)", group="Backtest")
+fromDate = input.time(timestamp("2015-01-01"), "From", group="Backtest")
+
+// ---------- Indicators ----------
+eF = ta.ema(close, emaFast)
+eM = ta.ema(close, emaMid)
+eT = ta.ema(close, emaTrend)
+atr = ta.atr(atrLen)
+
+inWindow = not useDates or time >= fromDate
+upRegime = close > eT and eF > eM
+
+// ---------- Entry: pullback to fast EMA, then reclaim ----------
+nearFast = (low <= eF * (1 + pullTol/100)) and (low < eF or close > eF)
+reclaim  = close > eF and close > open
+longSig  = inWindow and upRegime and nearFast and reclaim
+
+// ---------- Position sizing (risk-based, leverage-capped) ----------
+stopDist = atr * atrInit
+riskCash = strategy.equity * (riskPct / 100.0)
+qty      = math.min(stopDist > 0 ? riskCash / stopDist : 0, close > 0 ? (strategy.equity * maxLev) / close : 0)
+
+if longSig and strategy.position_size == 0 and qty > 0
+    strategy.entry("L", strategy.long, qty=qty)
+
+// ---------- Exit management: fixed chandelier trail (highest high SINCE ENTRY) ----------
+var float hiSinceEntry = na
+var float longStop      = na
+
+if strategy.position_size > 0
+    if strategy.position_size[1] == 0
+        hiSinceEntry := high                                   // reset at entry
+        longStop     := strategy.position_avg_price - stopDist // initial stop, gives room
+    else
+        hiSinceEntry := math.max(hiSinceEntry, high)           // only rises on NEW highs
+        longStop     := math.max(longStop, hiSinceEntry - atr * chMult)
+    strategy.exit("Exit", from_entry="L", stop=longStop)
+    if close < eM
+        strategy.close("L", comment="lost 50EMA")
+    if close < eT
+        strategy.close("L", comment="regime flip")
+else
+    hiSinceEntry := na
+    longStop     := na
+
+// ---------- Plots ----------
+plot(eF, "EMA20",  color=color.new(color.aqua,   0), linewidth=2)
+plot(eM, "EMA50",  color=color.new(color.yellow, 0))
+plot(eT, "EMA200", color=color.new(color.red,    0), linewidth=2)
+plot(strategy.position_size > 0 ? longStop : na, "Trailing stop", color=color.new(color.fuchsia, 0), style=plot.style_linebr, linewidth=2)
+bgcolor(upRegime and inWindow ? color.new(color.green, 92) : na)
+plotshape(longSig, "Long", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.small)

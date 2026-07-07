@@ -1,0 +1,84 @@
+//@version=5
+// =============================================================================
+// STRATEGY 1: TREND-FOLLOWING (EMA crossover + ADX trend-strength filter)
+// Timeframe: designed for 5-minute charts (US stocks & crypto)
+// Idea: Go long when fast EMA crosses above slow EMA AND trend is strong (ADX),
+//       go short on the opposite. ADX filter avoids choppy/sideways markets.
+// Risk: position size is calculated so each trade risks ~RiskPct of equity.
+// =============================================================================
+strategy("01 Trend EMA+ADX",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.02,        // ~2 bps; raise for stocks/crypto realism
+     slippage             = 2,           // ticks of slippage (be conservative)
+     pyramiding           = 0,
+     calc_on_every_tick   = false)
+
+// ---------- Inputs ----------
+fastLen   = input.int(9,   "Fast EMA",            group="Signal")
+slowLen   = input.int(21,  "Slow EMA",            group="Signal")
+adxLen    = input.int(14,  "ADX length",          group="Signal")
+adxMin    = input.float(20,"ADX minimum (trend strength)", group="Signal")
+
+atrLen    = input.int(14,  "ATR length",          group="Risk")
+atrStop   = input.float(1.5,"Stop = ATR x",       group="Risk", step=0.1)
+rr        = input.float(2.0,"Reward:Risk (TP multiple)", group="Risk", step=0.1)
+riskPct   = input.float(1.5,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev    = input.float(1.0,"Max leverage (notional / equity)", group="Risk", step=0.5)
+
+useSession= input.bool(true, "Intraday only (auto-close at session end)", group="Session")
+sess      = input.session("0930-1545","Session (exchange tz)", group="Session")
+tz        = input.string("America/New_York","Timezone", group="Session")
+allowLong = input.bool(true, "Allow Longs",  group="Direction")
+allowShort= input.bool(true, "Allow Shorts", group="Direction")
+
+// ---------- Indicators ----------
+fastEma = ta.ema(close, fastLen)
+slowEma = ta.ema(close, slowLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+atr     = ta.atr(atrLen)
+
+// ---------- Session handling ----------
+inSess  = not na(time(timeframe.period, sess, tz))
+canTrade= useSession ? inSess : true
+sessEnd = useSession and inSess[1] and not inSess   // just left the session
+
+// ---------- Signals ----------
+longSig  = allowLong  and ta.crossover(fastEma, slowEma)  and adx > adxMin and diPlus > diMinus
+shortSig = allowShort and ta.crossunder(fastEma, slowEma) and adx > adxMin and diMinus > diPlus
+
+// ---------- Position sizing (risk-based) ----------
+stopDist = atr * atrStop
+riskCash = strategy.equity * (riskPct / 100.0)
+qtyRisk  = stopDist > 0 ? riskCash / stopDist : 0
+qtyCap   = close > 0 ? (strategy.equity * maxLev) / close : 0   // never over-leverage
+qty      = math.min(qtyRisk, qtyCap)
+
+// ---------- Orders ----------
+if canTrade and qty > 0
+    if longSig
+        strategy.entry("L", strategy.long, qty=qty)
+    if shortSig
+        strategy.entry("S", strategy.short, qty=qty)
+
+// Stops / targets relative to average entry
+longStop  = strategy.position_avg_price - stopDist
+longTP    = strategy.position_avg_price + stopDist * rr
+shortStop = strategy.position_avg_price + stopDist
+shortTP   = strategy.position_avg_price - stopDist * rr
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", from_entry="L", stop=longStop, limit=longTP)
+if strategy.position_size < 0
+    strategy.exit("S-exit", from_entry="S", stop=shortStop, limit=shortTP)
+
+// Flatten everything at session end (no overnight risk for intraday)
+if sessEnd
+    strategy.close_all(comment="EOD flat")
+
+// ---------- Plots ----------
+plot(fastEma, "Fast EMA", color=color.new(color.aqua, 0))
+plot(slowEma, "Slow EMA", color=color.new(color.orange, 0))
+bgcolor(useSession and not inSess ? color.new(color.gray, 92) : na)

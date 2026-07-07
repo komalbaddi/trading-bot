@@ -1,0 +1,40 @@
+name: Alpaca Swing Bot (paper)
+
+# Runs the daily swing bot in the cloud — no need for your PC to be on.
+on:
+  schedule:
+    # 21:30 UTC, Mon-Fri = shortly after the US market close (year-round).
+    # Orders are DAY orders that queue for the next US open.
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch: {}   # lets you run it manually from the Actions tab (great for testing)
+
+permissions:
+  contents: write         # needed to commit the updated state file back
+
+concurrency:
+  group: swing-bot        # never run two copies at once
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"     # has global fetch; bot has no npm dependencies
+
+      - name: Run swing bot (paper)
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+        run: node alpaca/swing_bot.mjs
+
+      - name: Persist trailing-stop state
+        run: |
+          git config user.name  "swing-bot"
+          git config user.email "swing-bot@users.noreply.github.com"
+          git add analysis/swing_state.json
+          git diff --staged --quiet || git commit -m "Update swing state [skip ci]"
+          git push

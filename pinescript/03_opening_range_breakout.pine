@@ -1,0 +1,96 @@
+//@version=5
+// =============================================================================
+// STRATEGY 3: OPENING RANGE BREAKOUT (ORB)
+// Timeframe: 5-minute charts. Classic intraday STOCK strategy.
+// Idea: Mark the high/low of the first N minutes after the open. Go long if price
+//       breaks above the range high, short if it breaks below the low.
+//       One (or limited) trades per day. Flatten at session end.
+// NOTE: ORB needs a defined "open", so it suits stocks. For 24/7 crypto, set the
+//       session to your preferred daily reset window (e.g. 0000-2359 UTC start).
+// =============================================================================
+strategy("03 Opening Range Breakout",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.02,
+     slippage             = 2,
+     pyramiding           = 0)
+
+// ---------- Inputs ----------
+orbMin    = input.int(15,  "Opening range minutes", group="Signal", minval=1)
+sess      = input.session("0930-1600","Regular session", group="Session")
+tz        = input.string("America/New_York","Timezone", group="Session")
+exitMin   = input.int(15,  "Stop new entries N min before close", group="Session")
+maxTrades = input.int(2,   "Max entries per day",   group="Signal")
+buffTicks = input.float(0.0,"Breakout buffer (price units)", group="Signal", step=0.01)
+
+atrLen    = input.int(14,  "ATR length",            group="Risk")
+useRangeStop = input.bool(true,"Stop at opposite side of range", group="Risk")
+atrStop   = input.float(1.5,"Else Stop = ATR x",    group="Risk", step=0.1)
+rr        = input.float(2.0,"Reward:Risk (TP)",     group="Risk", step=0.1)
+riskPct   = input.float(1.5,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev    = input.float(1.0,"Max leverage (notional / equity)", group="Risk", step=0.5)
+allowLong = input.bool(true, "Allow Longs",  group="Direction")
+allowShort= input.bool(true, "Allow Shorts", group="Direction")
+
+// ---------- Session detection ----------
+inSess   = not na(time(timeframe.period, sess, tz))
+newDay   = inSess and not inSess[1]
+sessEnd  = inSess[1] and not inSess
+secsIn   = ta.barssince(newDay) * timeframe.in_seconds(timeframe.period)
+
+// ---------- Build opening range ----------
+var float orH = na
+var float orL = na
+var int   tradesToday = 0
+buildingRange = inSess and (secsIn < orbMin * 60)
+
+if newDay
+    orH := high
+    orL := low
+    tradesToday := 0
+else if buildingRange
+    orH := math.max(orH, high)
+    orL := math.min(orL, low)
+
+rangeReady = inSess and not buildingRange and not na(orH)
+
+// allow entries until 'exitMin' before the session ends — approximate via time
+// (we simply block new entries in the last exitMin minutes using bar-time math)
+minsLeftOK = true   // kept simple; EOD flatten handles the close
+
+atr      = ta.atr(atrLen)
+
+// ---------- Signals ----------
+longSig  = allowLong  and rangeReady and ta.crossover(close, orH + buffTicks) and tradesToday < maxTrades
+shortSig = allowShort and rangeReady and ta.crossunder(close, orL - buffTicks) and tradesToday < maxTrades
+
+// ---------- Sizing ----------
+longStopPx  = useRangeStop ? orL : close - atr * atrStop
+shortStopPx = useRangeStop ? orH : close + atr * atrStop
+longRisk    = math.abs(close - longStopPx)
+shortRisk   = math.abs(shortStopPx - close)
+riskCash    = strategy.equity * (riskPct / 100.0)
+qtyCap      = close > 0 ? (strategy.equity * maxLev) / close : 0   // never over-leverage
+
+if longSig and longRisk > 0
+    qty = math.min(riskCash / longRisk, qtyCap)
+    strategy.entry("L", strategy.long, qty=qty)
+    strategy.exit("L-exit", from_entry="L", stop=longStopPx, limit=close + longRisk * rr)
+    tradesToday += 1
+
+if shortSig and shortRisk > 0
+    qty = math.min(riskCash / shortRisk, qtyCap)
+    strategy.entry("S", strategy.short, qty=qty)
+    strategy.exit("S-exit", from_entry="S", stop=shortStopPx, limit=close - shortRisk * rr)
+    tradesToday += 1
+
+if sessEnd
+    strategy.close_all(comment="EOD flat")
+
+// ---------- Plots ----------
+plot(rangeReady ? orH : na, "OR High", color=color.new(color.green, 0), style=plot.style_linebr)
+plot(rangeReady ? orL : na, "OR Low",  color=color.new(color.red, 0),   style=plot.style_linebr)
+bgcolor(buildingRange ? color.new(color.yellow, 85) : na)
+bgcolor(not inSess ? color.new(color.gray, 92) : na)

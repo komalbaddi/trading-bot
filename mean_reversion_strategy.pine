@@ -1,0 +1,108 @@
+//@version=6
+// ============================================================================
+//  Mean-Reversion Strategy (RSI-2 pullback)  —  AAPL & equities/ETFs
+// ============================================================================
+//  Core idea (Connors-style):  In a confirmed long-term UPTREND, buy short-term
+//  OVERSOLD pullbacks and exit quickly on the snap-back. This is the natural
+//  COMPLEMENT to a trend-following crossover system — the two edges are largely
+//  uncorrelated, which smooths the combined equity curve.
+//
+//  Best on: liquid stocks (AAPL, MSFT), index ETFs (SPY, QQQ). Daily timeframe.
+//  Long-only by default (equities have upward drift). Everything is an input.
+// ============================================================================
+
+strategy(
+     title              = "Mean-Reversion RSI-2 (AAPL / Equities)",
+     shorttitle         = "MeanRev-RSI2",
+     overlay            = true,
+     initial_capital    = 10000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 100,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.02,
+     slippage           = 2,
+     pyramiding         = 3,            // allow scaling into deeper dips (optional)
+     process_orders_on_close = true)
+
+// ---------------------------------------------------------------------------
+//  INPUTS
+// ---------------------------------------------------------------------------
+grpTrend = "1) Trend Regime Filter"
+trendLen  = input.int(200, "Long-term trend MA", minval = 20, group = grpTrend)
+trendType = input.string("SMA", "Trend MA type", options = ["SMA","EMA"], group = grpTrend)
+
+grpEntry = "2) Entry (oversold pullback)"
+rsiLen    = input.int(2,  "RSI length (short)", minval = 1, group = grpEntry)
+rsiBuy    = input.int(10, "Buy when RSI <",     minval = 1, maxval = 50, group = grpEntry)
+useDeep   = input.bool(true, "Scale in on deeper dip (pyramiding)", group = grpEntry)
+rsiBuy2   = input.int(5,  "2nd buy when RSI <",  minval = 1, maxval = 50, group = grpEntry)
+
+grpExit  = "3) Exit"
+exitType  = input.string("RSI", "Exit rule", options = ["RSI","MA cross","Higher close"], group = grpExit)
+rsiSell   = input.int(60, "Exit when RSI >", minval = 30, maxval = 99, group = grpExit)
+exitMaLen = input.int(5,  "Exit MA length (MA cross)", minval = 2, group = grpExit)
+
+grpRisk  = "4) Risk / Safety Stop"
+useStop   = input.bool(true, "Use ATR catastrophe stop", group = grpRisk)
+atrLen    = input.int(14,  "ATR length", minval = 2, group = grpRisk)
+atrMult   = input.float(3.0, "Stop = ATR x", minval = 0.5, step = 0.1, group = grpRisk)
+riskPct   = input.float(2.0, "Capital per entry (% equity)", minval = 0.1, step = 0.1, group = grpRisk)
+
+grpDate  = "5) Backtest Window"
+useDate   = input.bool(false, "Limit date range", group = grpDate)
+startDate = input.time(timestamp("01 Jan 2015 00:00"), "Start", group = grpDate)
+endDate   = input.time(timestamp("01 Jan 2027 00:00"), "End",   group = grpDate)
+
+// ---------------------------------------------------------------------------
+//  INDICATORS
+// ---------------------------------------------------------------------------
+trendMa = trendType == "EMA" ? ta.ema(close, trendLen) : ta.sma(close, trendLen)
+rsi     = ta.rsi(close, rsiLen)
+exitMa  = ta.sma(close, exitMaLen)
+atr     = ta.atr(atrLen)
+
+dateOk  = not useDate or (time >= startDate and time <= endDate)
+uptrend = close > trendMa
+
+// ---------------------------------------------------------------------------
+//  ENTRY  (buy oversold dips only while in an uptrend)
+// ---------------------------------------------------------------------------
+buy1 = uptrend and rsi < rsiBuy  and dateOk
+buy2 = uptrend and useDeep and rsi < rsiBuy2 and dateOk
+
+qty  = (strategy.equity * (riskPct / 100.0)) / close
+
+if buy1
+    strategy.entry("MR", strategy.long, qty = qty)
+if buy2
+    strategy.entry("MR2", strategy.long, qty = qty)
+
+// ---------------------------------------------------------------------------
+//  EXIT  (fast snap-back exit + catastrophe stop)
+// ---------------------------------------------------------------------------
+exitSignal = exitType == "RSI"          ? rsi > rsiSell :
+             exitType == "MA cross"     ? ta.crossover(close, exitMa) :
+                                          close > close[1]   // "Higher close"
+
+if strategy.position_size > 0
+    if exitSignal
+        strategy.close_all(comment = "mean-revert exit")
+    if useStop
+        strategy.exit("stop", stop = strategy.position_avg_price - atr * atrMult)
+
+// ---------------------------------------------------------------------------
+//  PLOTS
+// ---------------------------------------------------------------------------
+plot(trendMa, "Trend MA", color = color.new(color.gray, 0), linewidth = 2)
+bgcolor(uptrend ? color.new(color.green, 94) : color.new(color.red, 94))
+plotshape(buy1, "Buy",  shape.triangleup, location.belowbar, color.new(color.green,0), size = size.tiny)
+plotshape(strategy.position_size > 0 and exitSignal, "Exit", shape.xcross, location.abovebar, color.new(color.orange,0), size = size.tiny)
+
+// ============================================================================
+//  SUGGESTED PRESET  (AAPL / SPY / QQQ — Daily)
+//    Trend: SMA 200  |  RSI 2 (buy < 10, deep buy < 5)
+//    Exit: RSI > 60  (or "Higher close" for even faster exits)
+//    ATR 14 stop x3  |  2% capital per entry
+//    Expect: HIGH win rate (~65-75%), small avg gain, short hold (2-5 bars).
+//    This is the LONG-only, mean-reversion counterpart to the EMA trend system.
+// ============================================================================

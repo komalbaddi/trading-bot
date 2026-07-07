@@ -1,0 +1,167 @@
+//@version=6
+// ============================================================================
+//  EMA Confluence Strategy  —  BTC/USD & AAPL (and most trending assets)
+// ============================================================================
+//  Core idea:  Trade EMA crossovers ONLY in the direction of the higher-period
+//  trend, ONLY when momentum (RSI) and trend-strength (ADX) confirm, and manage
+//  risk with volatility-adaptive (ATR) stops, targets and an optional trail.
+//
+//  Everything is an input so you can optimize in the Strategy Tester.
+//  Suggested starting presets are documented at the bottom of this file.
+// ============================================================================
+
+strategy(
+     title              = "EMA Confluence Strategy (BTC / AAPL)",
+     shorttitle         = "EMA-Confluence",
+     overlay            = true,
+     initial_capital    = 10000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 100,          // sizing is really controlled by risk % below
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.05,         // ~5 bps; raise for crypto exchanges/slippage
+     slippage           = 2,
+     pyramiding         = 0,
+     calc_on_every_tick = false,
+     process_orders_on_close = true)
+
+// ---------------------------------------------------------------------------
+//  INPUTS
+// ---------------------------------------------------------------------------
+grpEMA   = "1) EMA Crossover"
+emaFastLen = input.int(21,  "Fast EMA",  minval = 2,  group = grpEMA)
+emaSlowLen = input.int(55,  "Slow EMA",  minval = 3,  group = grpEMA)
+useTrend   = input.bool(true, "Use higher-timeframe trend filter (200 EMA)", group = grpEMA)
+emaTrendLen= input.int(200, "Trend EMA", minval = 20, group = grpEMA)
+
+grpRSI   = "2) RSI Momentum Filter"
+useRSI     = input.bool(true, "Enable RSI filter", group = grpRSI)
+rsiLen     = input.int(14,  "RSI Length", minval = 2, group = grpRSI)
+rsiLongMin = input.int(50,  "Long only if RSI >", minval = 1, maxval = 99, group = grpRSI)
+rsiShortMax= input.int(50,  "Short only if RSI <", minval = 1, maxval = 99, group = grpRSI)
+
+grpADX   = "3) ADX Trend-Strength Filter"
+useADX     = input.bool(true, "Enable ADX filter", group = grpADX)
+adxLen     = input.int(14,  "ADX/DI Length", minval = 2, group = grpADX)
+adxMin     = input.float(20, "Only trade if ADX >", minval = 0, group = grpADX)
+
+grpVol   = "4) Volume Filter"
+useVol     = input.bool(false, "Enable volume filter", group = grpVol)
+volMaLen   = input.int(20,  "Volume MA Length", minval = 2, group = grpVol)
+volMult    = input.float(1.0, "Volume > MA x", minval = 0.1, step = 0.1, group = grpVol)
+
+grpRisk  = "5) Risk / Exits (ATR based)"
+atrLen     = input.int(14,   "ATR Length", minval = 2, group = grpRisk)
+atrSLmult  = input.float(2.0,"Stop-Loss = ATR x", minval = 0.1, step = 0.1, group = grpRisk)
+atrTPmult  = input.float(4.0,"Take-Profit = ATR x (0 = off)", minval = 0.0, step = 0.1, group = grpRisk)
+useTrail   = input.bool(true,"Use ATR trailing stop", group = grpRisk)
+atrTrail   = input.float(3.0,"Trail = ATR x", minval = 0.1, step = 0.1, group = grpRisk)
+riskPct    = input.float(1.0,"Risk per trade (% of equity)", minval = 0.1, step = 0.1, group = grpRisk)
+exitOnCross= input.bool(false,"Also exit on opposite EMA cross", group = grpRisk)
+
+grpDir   = "6) Direction & Session"
+allowLong  = input.bool(true,  "Allow Longs",  group = grpDir)
+allowShort = input.bool(true,  "Allow Shorts", group = grpDir)
+
+grpDate  = "7) Backtest Window"
+useDate    = input.bool(false, "Limit backtest date range", group = grpDate)
+startDate  = input.time(timestamp("01 Jan 2020 00:00"), "Start", group = grpDate)
+endDate    = input.time(timestamp("01 Jan 2027 00:00"), "End",   group = grpDate)
+
+// ---------------------------------------------------------------------------
+//  INDICATORS
+// ---------------------------------------------------------------------------
+emaFast  = ta.ema(close, emaFastLen)
+emaSlow  = ta.ema(close, emaSlowLen)
+emaTrend = ta.ema(close, emaTrendLen)
+rsi      = ta.rsi(close, rsiLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)   // ta.dmi returns +DI, -DI, ADX
+atr      = ta.atr(atrLen)
+volMa    = ta.sma(volume, volMaLen)
+
+// ---------------------------------------------------------------------------
+//  ENTRY CONDITIONS
+// ---------------------------------------------------------------------------
+crossUp   = ta.crossover(emaFast, emaSlow)
+crossDown = ta.crossunder(emaFast, emaSlow)
+
+trendOkLong  = not useTrend or close > emaTrend
+trendOkShort = not useTrend or close < emaTrend
+rsiOkLong    = not useRSI   or rsi > rsiLongMin
+rsiOkShort   = not useRSI   or rsi < rsiShortMax
+adxOk        = not useADX   or adx > adxMin
+volOk        = not useVol   or volume > volMa * volMult
+dateOk       = not useDate  or (time >= startDate and time <= endDate)
+
+longSignal  = allowLong  and crossUp   and trendOkLong  and rsiOkLong  and adxOk and volOk and dateOk
+shortSignal = allowShort and crossDown and trendOkShort and rsiOkShort and adxOk and volOk and dateOk
+
+// ---------------------------------------------------------------------------
+//  POSITION SIZING  (risk % of equity / stop distance)
+// ---------------------------------------------------------------------------
+stopDist  = atr * atrSLmult
+riskCash  = strategy.equity * (riskPct / 100.0)
+qty       = stopDist > 0 ? riskCash / stopDist : na
+
+// ---------------------------------------------------------------------------
+//  ENTRIES
+// ---------------------------------------------------------------------------
+if longSignal and strategy.position_size <= 0
+    strategy.entry("Long", strategy.long, qty = qty)
+
+if shortSignal and strategy.position_size >= 0
+    strategy.entry("Short", strategy.short, qty = qty)
+
+// ---------------------------------------------------------------------------
+//  EXITS  (stop / target / trailing — all ATR based)
+// ---------------------------------------------------------------------------
+// Static SL/TP anchored to entry price
+longSL  = strategy.position_avg_price - atr * atrSLmult
+longTP  = atrTPmult > 0 ? strategy.position_avg_price + atr * atrTPmult : na
+shortSL = strategy.position_avg_price + atr * atrSLmult
+shortTP = atrTPmult > 0 ? strategy.position_avg_price - atr * atrTPmult : na
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", from_entry = "Long",
+         stop  = longSL,
+         limit = longTP,
+         trail_price  = useTrail ? close - atr * atrTrail : na,
+         trail_offset = useTrail ? (atr * atrTrail) / syminfo.mintick : na)
+    if exitOnCross and crossDown
+        strategy.close("Long", comment = "opp cross")
+
+if strategy.position_size < 0
+    strategy.exit("S-exit", from_entry = "Short",
+         stop  = shortSL,
+         limit = shortTP,
+         trail_price  = useTrail ? close + atr * atrTrail : na,
+         trail_offset = useTrail ? (atr * atrTrail) / syminfo.mintick : na)
+    if exitOnCross and crossUp
+        strategy.close("Short", comment = "opp cross")
+
+// ---------------------------------------------------------------------------
+//  PLOTS
+// ---------------------------------------------------------------------------
+plot(emaFast,  "Fast EMA",  color = color.new(color.aqua, 0),   linewidth = 1)
+plot(emaSlow,  "Slow EMA",  color = color.new(color.orange, 0), linewidth = 1)
+plot(useTrend ? emaTrend : na, "Trend EMA", color = color.new(color.gray, 0), linewidth = 2)
+
+bgcolor(useTrend and close > emaTrend ? color.new(color.green, 92) :
+         useTrend and close < emaTrend ? color.new(color.red, 92) : na)
+
+plotshape(longSignal,  "Long",  shape.triangleup,   location.belowbar, color.new(color.green,0), size = size.tiny)
+plotshape(shortSignal, "Short", shape.triangledown, location.abovebar, color.new(color.red,0),   size = size.tiny)
+
+// ============================================================================
+//  SUGGESTED STARTING PRESETS  (then OPTIMIZE — see notes the assistant gave)
+// ----------------------------------------------------------------------------
+//  BTC/USD  — 4H or 1D chart
+//    Fast EMA 21 | Slow EMA 55 | Trend EMA 200
+//    RSI 14 (>50 / <50) | ADX 14 (>20) | Volume OFF
+//    ATR 14 | SL 2.0x | TP 4.0x (or 0 + trailing) | Trail 3.0x | Risk 1%
+//
+//  AAPL  — 1D chart (swing)
+//    Fast EMA 20 | Slow EMA 50 | Trend EMA 200
+//    RSI 14 (>50 / <50) | ADX 14 (>20) | Volume ON (x1.0)
+//    ATR 14 | SL 2.0x | TP 3.0x | Trail 3.0x | Risk 1%
+//    Tip: for a long-only stock bias, turn OFF "Allow Shorts".
+// ============================================================================

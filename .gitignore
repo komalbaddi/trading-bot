@@ -1,0 +1,16 @@
+# === SECRETS — NEVER COMMIT THESE ===
+analysis/alpaca_keys.json
+# This Python bot has API keys hardcoded inside it — keep it OUT of the repo.
+# (You have no Python installed anyway; the Node bots are what run.)
+alpaca/trend_ema_adx_bot.py
+
+# logs & deps
+alpaca/swing_bot.log
+node_modules/
+*.log
+
+# local tooling config (not needed in the repo)
+.claude/
+
+# NOTE: analysis/swing_state.json IS tracked on purpose — the cloud bot commits it
+# back each run so trailing-stop state persists between runs.

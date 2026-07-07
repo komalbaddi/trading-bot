@@ -1,0 +1,90 @@
+//@version=5
+// =============================================================================
+// STRATEGY 2: MEAN-REVERSION (RSI + Bollinger Bands)
+// Timeframe: 5-minute charts. Best in choppy / range-bound conditions.
+// Idea: Buy when price closes below the lower Bollinger band AND RSI is oversold;
+//       short when above upper band AND RSI overbought. Exit back at the mean (basis).
+// A long-term trend filter (200 EMA) keeps you from fading strong trends.
+// =============================================================================
+strategy("02 MeanRev RSI+BB",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.02,
+     slippage             = 2,
+     pyramiding           = 0)
+
+// ---------- Inputs ----------
+bbLen     = input.int(20,  "BB length",            group="Signal")
+bbMult    = input.float(2.0,"BB std-dev mult",     group="Signal", step=0.1)
+rsiLen    = input.int(14,  "RSI length",           group="Signal")
+rsiOS     = input.float(30,"RSI oversold",         group="Signal")
+rsiOB     = input.float(70,"RSI overbought",       group="Signal")
+useTrendF = input.bool(true,"Use 200-EMA trend filter", group="Signal")
+trendLen  = input.int(200, "Trend EMA length",     group="Signal")
+
+atrLen    = input.int(14,  "ATR length",           group="Risk")
+atrStop   = input.float(2.0,"Stop = ATR x",        group="Risk", step=0.1)
+riskPct   = input.float(1.5,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev    = input.float(1.0,"Max leverage (notional / equity)", group="Risk", step=0.5)
+exitAtMid = input.bool(true,"Exit at BB mid-line (mean)", group="Risk")
+
+useSession= input.bool(true, "Intraday only (auto-close at session end)", group="Session")
+sess      = input.session("0930-1545","Session (exchange tz)", group="Session")
+tz        = input.string("America/New_York","Timezone", group="Session")
+allowLong = input.bool(true, "Allow Longs",  group="Direction")
+allowShort= input.bool(true, "Allow Shorts", group="Direction")
+
+// ---------- Indicators ----------
+basis  = ta.sma(close, bbLen)
+dev    = bbMult * ta.stdev(close, bbLen)
+upper  = basis + dev
+lower  = basis - dev
+rsi    = ta.rsi(close, rsiLen)
+trend  = ta.ema(close, trendLen)
+atr    = ta.atr(atrLen)
+
+// ---------- Session ----------
+inSess  = not na(time(timeframe.period, sess, tz))
+canTrade= useSession ? inSess : true
+sessEnd = useSession and inSess[1] and not inSess
+
+// ---------- Signals ----------
+trendUpOK   = not useTrendF or close > trend
+trendDownOK = not useTrendF or close < trend
+longSig  = allowLong  and ta.crossunder(close, lower) and rsi < rsiOS and trendUpOK
+shortSig = allowShort and ta.crossover(close, upper)  and rsi > rsiOB and trendDownOK
+
+// ---------- Sizing ----------
+stopDist = atr * atrStop
+riskCash = strategy.equity * (riskPct / 100.0)
+qtyRisk  = stopDist > 0 ? riskCash / stopDist : 0
+qtyCap   = close > 0 ? (strategy.equity * maxLev) / close : 0   // never over-leverage
+qty      = math.min(qtyRisk, qtyCap)
+
+// ---------- Orders ----------
+if canTrade and qty > 0
+    if longSig
+        strategy.entry("L", strategy.long, qty=qty)
+    if shortSig
+        strategy.entry("S", strategy.short, qty=qty)
+
+longStop  = strategy.position_avg_price - stopDist
+shortStop = strategy.position_avg_price + stopDist
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", from_entry="L", stop=longStop, limit=exitAtMid ? basis : na)
+if strategy.position_size < 0
+    strategy.exit("S-exit", from_entry="S", stop=shortStop, limit=exitAtMid ? basis : na)
+
+if sessEnd
+    strategy.close_all(comment="EOD flat")
+
+// ---------- Plots ----------
+plot(basis, "Basis", color=color.new(color.orange, 0))
+p1 = plot(upper, "Upper", color=color.new(color.blue, 50))
+p2 = plot(lower, "Lower", color=color.new(color.blue, 50))
+fill(p1, p2, color=color.new(color.blue, 92))
+plot(useTrendF ? trend : na, "Trend EMA", color=color.new(color.red, 0))
+bgcolor(useSession and not inSess ? color.new(color.gray, 92) : na)

@@ -1,0 +1,138 @@
+//@version=5
+// =============================================================================
+// STRATEGY 6: EMA STACK TREND + PULLBACK  (EMA 20 / 50 / 100 / 200)
+// Built from the AAPL multi-timeframe analysis: trade only WITH a fully stacked
+// EMA trend, entering on shallow pullbacks that reclaim the fast EMA.
+//
+// BULL setup: EMA20 > EMA50 > EMA100 > EMA200  (ribbon fanned up)
+//   -> price dips to/near EMA20 or EMA50, then closes back up = long entry
+// BEAR setup: mirror (off by default — trend was up; enable to trade downtrends)
+//
+// Safety model (same as the other scripts):
+//   * risk-based sizing capped so notional never exceeds MaxLeverage x equity
+//   * ATR stop-loss + fixed Reward:Risk target
+//   * intraday session filter + end-of-day flatten (toggle off for 24/7 crypto)
+//   * optional higher-timeframe trend filter (e.g. only long if Daily trend is up)
+// Designed for 5-min charts on US stocks & crypto, but works on any timeframe.
+// =============================================================================
+strategy("06 EMA Stack Trend+Pullback",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.02,
+     slippage             = 2,
+     pyramiding           = 0)
+
+// ---------- EMA inputs ----------
+len1 = input.int(20,  "EMA 1 (fast)",  group="EMAs")
+len2 = input.int(50,  "EMA 2",         group="EMAs")
+len3 = input.int(100, "EMA 3",         group="EMAs")
+len4 = input.int(200, "EMA 4 (slow)",  group="EMAs")
+pullTo = input.string("EMA20", "Pull back to", options=["EMA20","EMA50"], group="Signal")
+pullTolPct = input.float(0.25, "Pullback touch tolerance (%)", group="Signal", step=0.05)
+
+// ---------- Higher-timeframe trend filter ----------
+useHTF   = input.bool(true,  "Use higher-timeframe trend filter", group="HTF Filter")
+htfTF    = input.timeframe("D", "Higher timeframe", group="HTF Filter")
+htfEma   = input.int(200, "HTF EMA for trend", group="HTF Filter")
+
+// ---------- Risk ----------
+atrLen   = input.int(14,  "ATR length",          group="Risk")
+atrStop  = input.float(1.5,"Stop = ATR x",       group="Risk", step=0.1)
+rr       = input.float(2.0,"Reward:Risk (TP)",   group="Risk", step=0.1)
+riskPct  = input.float(1.5,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev   = input.float(1.0,"Max leverage (notional / equity)", group="Risk", step=0.5)
+trailOn  = input.bool(false,"Trail stop to fast EMA once in profit", group="Risk")
+
+// ---------- Session ----------
+useSession= input.bool(true, "Intraday only (auto-close at session end)", group="Session")
+sess      = input.session("0930-1545","Session (exchange tz)", group="Session")
+tz        = input.string("America/New_York","Timezone", group="Session")
+allowLong = input.bool(true,  "Allow Longs",  group="Direction")
+allowShort= input.bool(false, "Allow Shorts", group="Direction")
+
+// ---------- Indicators ----------
+ema1 = ta.ema(close, len1)
+ema2 = ta.ema(close, len2)
+ema3 = ta.ema(close, len3)
+ema4 = ta.ema(close, len4)
+atr  = ta.atr(atrLen)
+
+// stacked ribbon
+bullStack = ema1 > ema2 and ema2 > ema3 and ema3 > ema4
+bearStack = ema1 < ema2 and ema2 < ema3 and ema3 < ema4
+
+// higher-timeframe trend
+htfClose = request.security(syminfo.tickerid, htfTF, close, lookahead=barmerge.lookahead_off)
+htfMa    = request.security(syminfo.tickerid, htfTF, ta.ema(close, htfEma), lookahead=barmerge.lookahead_off)
+htfUp    = not useHTF or htfClose > htfMa
+htfDown  = not useHTF or htfClose < htfMa
+
+// ---------- Session handling ----------
+// Session/EOD-flatten only makes sense on INTRADAY charts. On Daily/Weekly/Monthly
+// this auto-disables so the same script works as a swing strategy without misfiring.
+sessionActive = useSession and timeframe.isintraday
+inSess  = not na(time(timeframe.period, sess, tz))
+canTrade= sessionActive ? inSess : true
+sessEnd = sessionActive and inSess[1] and not inSess
+
+// ---------- Pullback detection ----------
+pullEma   = pullTo == "EMA20" ? ema1 : ema2
+touchedLo = low  <= pullEma * (1 + pullTolPct/100) and low  >= pullEma * (1 - pullTolPct/100 - 0.02)
+touchedHi = high >= pullEma * (1 - pullTolPct/100) and high <= pullEma * (1 + pullTolPct/100 + 0.02)
+// "near" = the bar's range came within tolerance of the pull EMA
+nearLong  = math.abs(low  - pullEma) / pullEma * 100 <= pullTolPct or (low  < pullEma and close > pullEma)
+nearShort = math.abs(high - pullEma) / pullEma * 100 <= pullTolPct or (high > pullEma and close < pullEma)
+
+reclaimUp   = close > pullEma and close > open           // bullish reclaim candle
+reclaimDown = close < pullEma and close < open           // bearish reject candle
+
+longSig  = allowLong  and bullStack and htfUp   and nearLong  and reclaimUp  and close > ema1
+shortSig = allowShort and bearStack and htfDown and nearShort and reclaimDown and close < ema1
+
+// ---------- Sizing (risk-based, leverage-capped) ----------
+stopDist = atr * atrStop
+riskCash = strategy.equity * (riskPct / 100.0)
+qtyRisk  = stopDist > 0 ? riskCash / stopDist : 0
+qtyCap   = close > 0 ? (strategy.equity * maxLev) / close : 0   // never over-leverage
+qty      = math.min(qtyRisk, qtyCap)
+
+// ---------- Orders ----------
+if canTrade and qty > 0
+    if longSig and strategy.position_size == 0
+        strategy.entry("L", strategy.long, qty=qty)
+    if shortSig and strategy.position_size == 0
+        strategy.entry("S", strategy.short, qty=qty)
+
+// base stop / target
+longStop  = strategy.position_avg_price - stopDist
+longTP    = strategy.position_avg_price + stopDist * rr
+shortStop = strategy.position_avg_price + stopDist
+shortTP   = strategy.position_avg_price - stopDist * rr
+
+// optional trail: once price > entry, ratchet stop up to the fast EMA
+longStopFinal  = trailOn and close > strategy.position_avg_price ? math.max(longStop,  ema1 - atr*0.25) : longStop
+shortStopFinal = trailOn and close < strategy.position_avg_price ? math.min(shortStop, ema1 + atr*0.25) : shortStop
+
+if strategy.position_size > 0
+    strategy.exit("L-exit", from_entry="L", stop=longStopFinal, limit=longTP)
+    if not bullStack
+        strategy.close("L", comment="stack broke")
+if strategy.position_size < 0
+    strategy.exit("S-exit", from_entry="S", stop=shortStopFinal, limit=shortTP)
+    if not bearStack
+        strategy.close("S", comment="stack broke")
+
+if sessEnd
+    strategy.close_all(comment="EOD flat")
+
+// ---------- Plots ----------
+plot(ema1, "EMA20",  color=color.new(color.aqua,   0), linewidth=2)
+plot(ema2, "EMA50",  color=color.new(color.yellow, 0))
+plot(ema3, "EMA100", color=color.new(color.orange, 0))
+plot(ema4, "EMA200", color=color.new(color.red,    0), linewidth=2)
+bgcolor(bullStack ? color.new(color.green, 92) : bearStack ? color.new(color.red, 93) : na)
+bgcolor(sessionActive and not inSess ? color.new(color.gray, 95) : na)
+plotshape(longSig,  "Long",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size=size.tiny)
+plotshape(shortSig, "Short", shape.triangledown, location.abovebar, color.new(color.red,   0), size=size.tiny)

@@ -1,0 +1,132 @@
+//@version=5
+// =============================================================================
+// STRATEGY 7: DAILY SWING TREND  (EMA 20/50/200 + trailing stop)
+// PURPOSE-BUILT for the DAILY chart. Hold days-to-weeks. No intraday session logic.
+//
+// WHY THIS IS DIFFERENT FROM THE INTRADAY SCRIPTS:
+//   * Trades only in a confirmed long-term UPTREND (price above 200-EMA).
+//   * Enters on a pullback that reclaims the 20-EMA, OR on an N-day breakout.
+//   * Exits with a CHANDELIER trailing stop that ratchets up — this lets big
+//     winners run, which is the entire edge behind trend swing-trading. A fixed
+//     2:1 target (good for scalping) would cut the winners that pay for the losers.
+//   * Long-only by default: stocks drift up over time and shorting swing is harder.
+//
+// Risk model: risk RiskPct of equity per trade, capped so notional <= MaxLev x equity.
+// =============================================================================
+strategy("07 Daily Swing Trend",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.0,          // Alpaca US stocks are commission-free; raise to be conservative
+     slippage             = 1,
+     pyramiding           = 0)
+
+// ---------- Entry style ----------
+mode      = input.string("Pullback", "Entry style", options=["Pullback","Breakout"], group="Signal")
+emaFast   = input.int(20,  "Fast EMA",  group="Signal")
+emaMid    = input.int(50,  "Mid EMA",   group="Signal")
+emaTrend  = input.int(200, "Trend EMA (regime filter)", group="Signal")
+pullTolPct= input.float(2.0,"Pullback zone: within % of fast EMA", group="Signal", step=0.25)
+breakLen  = input.int(20,  "Breakout: N-day high", group="Signal")
+
+// ---------- Higher-timeframe filter (weekly trend) ----------
+useHTF    = input.bool(true, "Require weekly uptrend", group="HTF Filter")
+htfTF     = input.timeframe("W", "Higher timeframe",  group="HTF Filter")
+htfLen    = input.int(30,   "HTF EMA",                group="HTF Filter")
+
+// ---------- Risk / exits ----------
+atrLen    = input.int(14,  "ATR length",              group="Risk")
+atrInit   = input.float(2.5,"Initial stop = ATR x",   group="Risk", step=0.1)
+chLen     = input.int(22,  "Chandelier lookback (bars)", group="Risk")
+chMult    = input.float(3.0,"Chandelier trailing = ATR x", group="Risk", step=0.1)
+useMAexit = input.bool(true,"Also exit if daily close < Mid EMA", group="Risk")
+riskPct   = input.float(1.5,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev    = input.float(1.0,"Max leverage (notional / equity)", group="Risk", step=0.5)
+allowShort= input.bool(false,"Allow Shorts (downtrends)", group="Direction")
+
+// ---------- Backtest window (optional) ----------
+useDates  = input.bool(false,"Limit backtest date range", group="Backtest")
+fromDate  = input.time(timestamp("2021-01-01"), "From", group="Backtest")
+toDate    = input.time(timestamp("2026-12-31"), "To",   group="Backtest")
+inWindow  = not useDates or (time >= fromDate and time <= toDate)
+
+// ---------- Indicators ----------
+eF   = ta.ema(close, emaFast)
+eM   = ta.ema(close, emaMid)
+eT   = ta.ema(close, emaTrend)
+atr  = ta.atr(atrLen)
+
+upRegime   = close > eT and eF > eM        // long-term up + short-term aligned
+downRegime = close < eT and eF < eM
+
+htfMa   = request.security(syminfo.tickerid, htfTF, ta.ema(close, htfLen), lookahead=barmerge.lookahead_off)
+htfC    = request.security(syminfo.tickerid, htfTF, close,                  lookahead=barmerge.lookahead_off)
+htfUp   = not useHTF or htfC > htfMa
+htfDown = not useHTF or htfC < htfMa
+
+// ---------- Entry signals ----------
+nearFastLong  = (low  <= eF * (1 + pullTolPct/100)) and (low  < eF or close > eF)  // dipped into the fast-EMA zone
+nearFastShort = (high >= eF * (1 - pullTolPct/100)) and (high > eF or close < eF)
+reclaimUp     = close > eF and close > open
+reclaimDown   = close < eF and close < open
+breakoutUp    = close > ta.highest(high, breakLen)[1]
+breakoutDown  = close < ta.lowest(low,  breakLen)[1]
+
+longEntry  = mode == "Pullback" ? (nearFastLong and reclaimUp)   : breakoutUp
+shortEntry = mode == "Pullback" ? (nearFastShort and reclaimDown): breakoutDown
+
+longSig  = upRegime   and htfUp   and longEntry
+shortSig = allowShort and downRegime and htfDown and shortEntry
+
+// ---------- Sizing ----------
+stopDist = atr * atrInit
+riskCash = strategy.equity * (riskPct / 100.0)
+qtyRisk  = stopDist > 0 ? riskCash / stopDist : 0
+qtyCap   = close > 0 ? (strategy.equity * maxLev) / close : 0
+qty      = math.min(qtyRisk, qtyCap)
+
+// ---------- Orders + trailing management ----------
+var float longStopLvl  = na
+var float shortStopLvl = na
+
+if inWindow and qty > 0
+    if longSig and strategy.position_size == 0
+        strategy.entry("L", strategy.long, qty=qty)
+        longStopLvl := close - stopDist
+    if shortSig and strategy.position_size == 0
+        strategy.entry("S", strategy.short, qty=qty)
+        shortStopLvl := close + stopDist
+
+if strategy.position_size > 0
+    chStop     = ta.highest(high, chLen) - atr * chMult      // chandelier long stop
+    longStopLvl := math.max(nz(longStopLvl, chStop), chStop) // ratchet UP only
+    strategy.exit("L-x", from_entry="L", stop=longStopLvl)
+    if useMAexit and close < eM
+        strategy.close("L", comment="lost midEMA")
+else
+    longStopLvl := na
+
+if strategy.position_size < 0
+    chStopS      = ta.lowest(low, chLen) + atr * chMult
+    shortStopLvl := math.min(nz(shortStopLvl, chStopS), chStopS)  // ratchet DOWN only
+    strategy.exit("S-x", from_entry="S", stop=shortStopLvl)
+    if useMAexit and close > eM
+        strategy.close("S", comment="regained midEMA")
+else
+    shortStopLvl := na
+
+// close everything if the long-term regime flips against us
+if strategy.position_size > 0 and close < eT
+    strategy.close("L", comment="regime flip")
+if strategy.position_size < 0 and close > eT
+    strategy.close("S", comment="regime flip")
+
+// ---------- Plots ----------
+plot(eF, "EMA20",  color=color.new(color.aqua,   0), linewidth=2)
+plot(eM, "EMA50",  color=color.new(color.yellow, 0))
+plot(eT, "EMA200", color=color.new(color.red,    0), linewidth=2)
+plot(strategy.position_size > 0 ? longStopLvl : na, "Trail stop", color=color.new(color.fuchsia,0), style=plot.style_linebr)
+bgcolor(upRegime ? color.new(color.green, 92) : downRegime ? color.new(color.red, 93) : na)
+plotshape(longSig,  "Long",  shape.triangleup,   location.belowbar, color.new(color.green,0), size=size.small)
+plotshape(shortSig, "Short", shape.triangledown, location.abovebar, color.new(color.red,  0), size=size.small)

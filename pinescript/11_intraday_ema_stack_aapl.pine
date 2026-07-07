@@ -1,0 +1,88 @@
+//@version=5
+// =============================================================================
+// STRATEGY 11: INTRADAY EMA STACK  (EMAs ONLY, long-only) — for AAPL
+// The best-performing EMA-ONLY intraday setup in a real-data test of AAPL
+// (5m & 15m, 60 days). Enters when three EMAs stack up bullishly, exits when
+// the stack breaks or at the close.
+//
+// >>> RECOMMENDED TIMEFRAME: 5-MINUTE (EMA-only worked better on 5m than 15m). <<<
+//
+// HONEST NOTE: profit factor was only ~1.3 (barely above breakeven), vs ~2.0 for
+// the ORB+VWAP strategy (script 10). EMAs alone are a WEAK intraday edge. Small
+// sample (~30-120 trades). Paper-trade before trusting it, and do not use leverage.
+//
+// Logic (EMAs only):
+//   * Bullish stack = EMA9 > EMA21 > EMA50 (ribbon fanned up).
+//   * ENTER long on the first bar the stack aligns AND price is above the fast EMA.
+//   * EXIT when the stack breaks (EMA9 <= EMA21 or EMA21 <= EMA50), or at the close.
+//   * A wide ATR stop sits underneath for catastrophe protection + position sizing.
+// =============================================================================
+strategy("11 Intraday EMA Stack (AAPL)",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.0,      // Alpaca commission-free
+     slippage             = 2,        // ticks — keep it; intraday costs are real
+     pyramiding           = 0)
+
+// ---------- EMA inputs (EMAs only) ----------
+len1 = input.int(9,  "EMA fast", group="EMAs")     // try 5/13/34 as an alternative set
+len2 = input.int(21, "EMA mid",  group="EMAs")
+len3 = input.int(50, "EMA slow", group="EMAs")
+
+// ---------- Risk ----------
+atrLen  = input.int(14,  "ATR length",              group="Risk")
+atrStop = input.float(2.5,"Protective stop = ATR x",group="Risk", step=0.1)
+riskPct = input.float(1.0,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev  = input.float(1.0,"Max leverage (notional / equity)", group="Risk", step=0.5)
+
+// ---------- Session ----------
+sess   = input.session("0930-1600","Regular session", group="Session")
+tz     = input.string("America/New_York","Timezone", group="Session")
+skipMin= input.int(30, "Skip first N minutes after open", group="Session")
+
+// ---------- Indicators ----------
+eF = ta.ema(close, len1)
+eM = ta.ema(close, len2)
+eS = ta.ema(close, len3)
+atr = ta.atr(atrLen)
+
+// ---------- Session handling ----------
+inSess     = not na(time(timeframe.period, sess, tz)) and timeframe.isintraday
+newSession = inSess and not inSess[1]
+sessEnd    = inSess[1] and not inSess
+var int startT = na
+if newSession
+    startT := time
+afterOpen = inSess and not na(startT) and (time - startT) >= skipMin * 60 * 1000
+
+// ---------- Signals ----------
+bullStack = eF > eM and eM > eS
+longSig   = inSess and afterOpen and bullStack and not bullStack[1] and close > eF
+
+// ---------- Sizing ----------
+stopDist  = atr * atrStop
+riskCash  = strategy.equity * (riskPct / 100.0)
+qty       = math.min(stopDist > 0 ? riskCash / stopDist : 0, close > 0 ? (strategy.equity * maxLev) / close : 0)
+
+// ---------- Orders ----------
+if longSig and strategy.position_size == 0 and qty > 0
+    strategy.entry("L", strategy.long, qty=qty)
+
+if strategy.position_size > 0
+    strategy.exit("L-x", from_entry="L", stop=strategy.position_avg_price - stopDist)  // protective stop
+    if not bullStack
+        strategy.close("L", comment="stack broke")
+
+// flat by the close — no overnight risk
+if sessEnd
+    strategy.close_all(comment="EOD flat")
+
+// ---------- Plots ----------
+plot(eF, "EMA9",  color=color.new(color.aqua,   0), linewidth=2)
+plot(eM, "EMA21", color=color.new(color.yellow, 0))
+plot(eS, "EMA50", color=color.new(color.red,    0), linewidth=2)
+bgcolor(bullStack and inSess ? color.new(color.green, 90) : na)
+bgcolor(not inSess ? color.new(color.gray, 94) : na)
+plotshape(longSig, "Long", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.tiny)
