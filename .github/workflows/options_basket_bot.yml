@@ -1,0 +1,39 @@
+name: Options Basket Dip Bot (paper)
+
+# Scans the 12-name basket daily for mean-reversion dip signals and logs the
+# recommended ITM calls. DRY_RUN in the bot = logs only (no orders) until you flip it.
+on:
+  schedule:
+    - cron: "30 21 * * 1-5"   # 21:30 UTC weekdays = shortly after the US close
+  workflow_dispatch: {}         # run manually from the Actions tab
+
+permissions:
+  contents: write               # to commit the state file back
+
+concurrency:
+  group: options-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run options basket bot
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+        run: node alpaca/options_basket_bot.mjs
+
+      - name: Persist state
+        run: |
+          git config user.name  "options-bot"
+          git config user.email "options-bot@users.noreply.github.com"
+          git add analysis/options_state.json
+          git diff --staged --quiet || git commit -m "Update options state [skip ci]"
+          git push
