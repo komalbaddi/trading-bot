@@ -1,0 +1,36 @@
+name: BTC 6h Trend Bot (paper)
+
+# Runs every 6 hours (crypto trades 24/7). Loss-minimized EMA 20/100 trend on 6h bars.
+# Binance for live 6h data, Alpaca PAPER for execution. DRY_RUN in the bot = logs only.
+on:
+  schedule:
+    - cron: "5 */6 * * *"    # 00:05, 06:05, 12:05, 18:05 UTC — ~5 min after each 6h bar close
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: btc-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run BTC 6h bot
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+        run: node alpaca/btc_bot.mjs
+      - name: Persist state
+        run: |
+          git config user.name  "btc-bot"
+          git config user.email "btc-bot@users.noreply.github.com"
+          git add analysis/btc_state.json
+          git diff --staged --quiet || git commit -m "Update BTC state [skip ci]"
+          git push
