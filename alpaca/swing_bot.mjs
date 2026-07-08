@@ -29,7 +29,8 @@ const ATR_INIT = 2.5;     // initial stop = ATR x
 const CH_MULT  = 6.0;     // trailing stop = ATR x (walk-forward optimum; 5-6 equivalent)
 const RISK_PCT = 1.5;     // % equity risked per trade
 const MAX_LEV  = 1.0;     // notional cap
-const SLOTS    = 10;      // portfolio slots: each position capped ~equity/SLOTS (equal-weight, keeps you diversified & unleveraged)
+const SLOTS      = 10;    // portfolio slots (each position ~ budget/SLOTS)
+const BUDGET_PCT = 40;    // this bot's share of the whole account (rest goes to BTC / options bots)
 const FEED     = "iex";   // "iex" (free) or "sip" (paid)
 // ----------------------------------------
 
@@ -114,7 +115,7 @@ async function processSymbol(sym, equity, state, avail) {
     if (state[sym]) delete state[sym];                            // clean stale state
     if (upRegime && b.c > priorHigh) {
       const stopDist = a[i] * ATR_INIT;
-      const allocCap = equity / SLOTS;                                       // equal-weight per position
+      const allocCap = (equity * BUDGET_PCT / 100) / SLOTS;                  // per position, within this bot's budget
       const notionalCap = Math.min(equity * MAX_LEV, allocCap, avail.cash);  // never exceed available cash
       const qty = Math.floor(Math.min((equity * RISK_PCT / 100) / stopDist, notionalCap / b.c));
       if (qty < 1) { console.log(`[${sym}] breakout but no capital slot free (avail cash $${avail.cash.toFixed(0)})`); return; }
@@ -158,7 +159,7 @@ async function processSymbol(sym, equity, state, avail) {
   const acct = await api(TRADE, "GET", "/v2/account");
   const clock = await api(TRADE, "GET", "/v2/clock");
   const equity = parseFloat(acct.equity);
-  const avail = { cash: parseFloat(acct.cash) };
+  const avail = { cash: Math.min(parseFloat(acct.cash), equity * BUDGET_PCT / 100) };  // cap total to this bot's budget
   console.log(`Alpaca ${PAPER ? "PAPER" : "LIVE"} | equity $${equity.toFixed(0)} | cash $${avail.cash.toFixed(0)} | ${SYMBOLS.length} symbols | market ${clock.is_open ? "OPEN" : "closed"} | ${new Date().toISOString()}`);
   if (clock.is_open) console.log("NOTE: market is open — for clean daily signals run this AFTER the close (~16:15 ET).");
   const state = loadState();

@@ -15,7 +15,7 @@ const PAPER   = true;
 const DRY_RUN = true;                 // <<< true = log only. Set false to place paper orders.
 const FAST = 20, SLOW = 50, ATR_LEN = 14, TRAIL = 7, INIT = 3;
 const REGIME = true, REG_LEN = 200;   // regime filter: only buy above the 200-EMA (lower drawdown). false = higher return.
-const ALLOC_PCT = 95;                 // % of equity deployed into BTC on entry
+const ALLOC_PCT = 30;                 // this bot's share of the account (rest goes to swing / options bots)
 // ----------------------------------------
 
 let id = process.env.APCA_API_KEY_ID || process.env.ALPACA_API_KEY || "";
