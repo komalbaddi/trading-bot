@@ -52,7 +52,20 @@ async function getDaily(sym) {
   u.searchParams.set("limit", "10000"); u.searchParams.set("adjustment", "split"); u.searchParams.set("feed", "iex");
   const r = await fetch(u, { headers: H }); if (!r.ok) throw new Error(`bars ${sym}: ${r.status}`);
   const j = await r.json();
-  return (j.bars || []).map(b => ({ d: b.t.slice(0, 10), o: b.o, h: b.h, l: b.l, c: b.c }));
+  const bars = (j.bars || []).map(b => ({ d: b.t.slice(0, 10), o: b.o, h: b.h, l: b.l, c: b.c }));
+  // Inject the CURRENT (near-close) price so the signal reflects NOW — this bot is meant
+  // to run ~10 min before the close, while options are still tradeable. Without this it
+  // would evaluate on a stale close and you'd miss the entry / can't buy after hours.
+  try {
+    const q = await api(DATA, "GET", `/v2/stocks/${sym}/trades/latest?feed=iex`);
+    const lp = q?.trade?.p;
+    if (lp && bars.length) {
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // YYYY-MM-DD
+      if (bars[bars.length - 1].d === today) bars[bars.length - 1].c = lp;
+      else bars.push({ d: today, o: lp, h: lp, l: lp, c: lp });
+    }
+  } catch { /* fall back to last daily close if live price unavailable */ }
+  return bars;
 }
 
 // pick a slightly-ITM call ~TARGET_DTE out; return {symbol, strike, expiry, premium} (premium estimated if quote unavailable)

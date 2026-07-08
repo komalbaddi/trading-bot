@@ -3,9 +3,10 @@ name: Alpaca Swing Bot (paper)
 # Runs the daily swing bot in the cloud — no need for your PC to be on.
 on:
   schedule:
-    # 21:30 UTC, Mon-Fri = shortly after the US market close (year-round).
-    # Orders are DAY orders that queue for the next US open.
-    - cron: "30 21 * * 1-5"
+    # 19:50 UTC, Mon-Fri = ~3:50 PM ET (EDT), ~10 min BEFORE the close, while the market
+    # is open — so breakout entries execute SAME DAY near the signal price instead of
+    # gapping at the next open. (In winter/EST this is ~2:50 PM ET — earlier, still open.)
+    - cron: "50 19 * * 1-5"
   workflow_dispatch: {}   # lets you run it manually from the Actions tab (great for testing)
 
 permissions:

@@ -4,7 +4,10 @@ name: Options Basket Dip Bot (paper)
 # recommended ITM calls. DRY_RUN in the bot = logs only (no orders) until you flip it.
 on:
   schedule:
-    - cron: "30 21 * * 1-5"   # 21:30 UTC weekdays = shortly after the US close
+    # 19:50 UTC weekdays = ~3:50 PM ET (EDT), ~10 min BEFORE the close, while options
+    # are still tradeable. (In winter/EST this is ~2:50 PM ET — earlier, but still open.)
+    # Must run during market hours so the near-close signal can actually be executed.
+    - cron: "50 19 * * 1-5"
   workflow_dispatch: {}         # run manually from the Actions tab
 
 permissions:

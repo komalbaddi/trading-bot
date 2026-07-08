@@ -77,6 +77,18 @@ async function getBars(sym) {
     for (const b of j.bars || []) bars.push({ d: b.t.slice(0, 10), o: b.o, h: b.h, l: b.l, c: b.c });
     token = j.next_page_token;
   } while (token);
+  // Inject the CURRENT (near-close) price so the breakout signal reflects NOW — this bot
+  // is meant to run ~10 min before the close so entries execute same-day instead of gapping
+  // at the next open. Falls back to the last daily close if the live price is unavailable.
+  try {
+    const q = await api(DATA, "GET", `/v2/stocks/${sym}/trades/latest?feed=${FEED}`);
+    const lp = q?.trade?.p;
+    if (lp && bars.length) {
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+      if (bars[bars.length - 1].d === today) { bars[bars.length - 1].c = lp; bars[bars.length - 1].h = Math.max(bars[bars.length - 1].h, lp); bars[bars.length - 1].l = Math.min(bars[bars.length - 1].l, lp); }
+      else bars.push({ d: today, o: lp, h: lp, l: lp, c: lp });
+    }
+  } catch { /* keep last daily close */ }
   return bars;
 }
 
