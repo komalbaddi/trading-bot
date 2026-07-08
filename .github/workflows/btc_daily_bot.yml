@@ -1,0 +1,37 @@
+name: BTC Daily Trend Bot (paper)
+
+# Runs once a day, ~5 min after the daily crypto bar closes (00:00 UTC).
+# "Better daily" strategy: EMA 20/50 + 200-EMA regime filter + 7xATR trailing stop.
+# Binance for live data, Alpaca PAPER for execution. DRY_RUN in the bot = logs only.
+on:
+  schedule:
+    - cron: "5 0 * * *"      # 00:05 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: btc-daily-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run BTC daily bot
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+        run: node alpaca/btc_daily_bot.mjs
+      - name: Persist state
+        run: |
+          git config user.name  "btc-daily-bot"
+          git config user.email "btc-daily-bot@users.noreply.github.com"
+          git add analysis/btc_daily_state.json
+          git diff --staged --quiet || git commit -m "Update BTC daily state [skip ci]"
+          git push
