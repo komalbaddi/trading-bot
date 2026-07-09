@@ -15,7 +15,7 @@ const __dir = path.dirname(fileURLToPath(import.meta.url));
 
 // ---------------- CONFIG ----------------
 const PAPER   = true;
-const DRY_RUN = true;                         // <<< true = log only. Set false to place paper option orders.
+const DRY_RUN = false;                        // LIVE PAPER — will place paper option orders when a dip signal fires.
 const UNIVERSE = ["AAPL","MSFT","NVDA","TSLA","AMZN","META","GOOGL","AMD","AVGO","NFLX","CRM","JPM"];
 const PREMIUM_PCT = 4.0;                       // % of equity spent on premium per trade (aggressive; -50% stop = 2% risk)
 const MAX_POSITIONS = 8;                       // concurrent option positions
@@ -94,6 +94,11 @@ async function pickCall(sym, spot) {
   const acct = await api(TRADE, "GET", "/v2/account");
   const equity = parseFloat(acct.equity);
   const state = loadState();
+  // SAFETY: never place a second order on an underlying that already has a pending order
+  // or an open option position (prevents the duplicate-order bug seen on the swing bot).
+  const openOrders = await api(TRADE, "GET", "/v2/orders?status=open&limit=500") || [];
+  const openPositions = await api(TRADE, "GET", "/v2/positions") || [];
+  const engaged = sym => openOrders.some(o => o.symbol.startsWith(sym)) || openPositions.some(p => p.symbol.startsWith(sym) && p.symbol.length > sym.length);
   const openCount = Object.keys(state).length;
   console.log(`\n=== OPTIONS BASKET BOT (${DRY_RUN ? "DRY-RUN / log only" : "LIVE PAPER"}) ===`);
   console.log(`Equity $${equity.toFixed(0)} | open positions ${openCount}/${MAX_POSITIONS} | premium/trade ${PREMIUM_PCT}% ($${(equity * PREMIUM_PCT / 100).toFixed(0)})\n`);
@@ -116,6 +121,7 @@ async function pickCall(sym, spot) {
   // ---- scan for NEW entries ----
   for (const sym of UNIVERSE) {
     if (state[sym]) continue;
+    if (engaged(sym)) { console.log(`[${sym}] already has a pending order/position — skip (no duplicate)`); continue; }
     if (Object.keys(state).length >= MAX_POSITIONS) { console.log(`(slots full — skipping remaining scans)`); break; }
     try {
       const bars = await getDaily(sym); if (bars.length < 210) continue;
