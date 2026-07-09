@@ -4,5 +4,11 @@
     "hi": 269.395,
     "stop": 252.35,
     "stopOrderId": "f57f98f4-8a3c-4e3f-ad8d-aaa0fc5cd3cc"
+  },
+  "UNH": {
+    "entryDate": "2026-07-09",
+    "hi": 434.19,
+    "stop": 407.72,
+    "stopOrderId": null
   }
 }
