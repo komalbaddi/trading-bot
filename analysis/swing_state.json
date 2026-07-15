@@ -4,5 +4,23 @@
     "hi": 434.19,
     "stop": 407.72,
     "stopOrderId": "ab754d11-3c52-40f8-96c9-89546f723c1c"
+  },
+  "AAPL": {
+    "entryDate": "2026-07-15",
+    "hi": 328.705,
+    "stop": 306.85,
+    "stopOrderId": null
+  },
+  "META": {
+    "entryDate": "2026-07-15",
+    "hi": 685.98,
+    "stop": 617.47,
+    "stopOrderId": null
+  },
+  "JPM": {
+    "entryDate": "2026-07-15",
+    "hi": 351.05,
+    "stop": 328.42,
+    "stopOrderId": null
   }
 }
