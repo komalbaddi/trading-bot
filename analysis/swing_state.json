@@ -7,15 +7,9 @@
   },
   "AAPL": {
     "entryDate": "2026-07-15",
-    "hi": 334.65,
+    "hi": 334.98,
     "stop": 306.85,
     "stopOrderId": "c7568521-692e-4f9f-9d5f-39e1d1eb04a5"
-  },
-  "META": {
-    "entryDate": "2026-07-15",
-    "hi": 685.98,
-    "stop": 617.47,
-    "stopOrderId": "fd4b17ee-ee82-4141-ab02-d1ab44404c95"
   },
   "JPM": {
     "entryDate": "2026-07-15",
@@ -27,6 +21,6 @@
     "entryDate": "2026-07-16",
     "hi": 364.84,
     "stop": 344.55,
-    "stopOrderId": null
+    "stopOrderId": "23469b43-a6c0-4eab-ab46-f86c0ab0cfd9"
   }
 }
