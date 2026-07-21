@@ -1,0 +1,72 @@
+//@version=5
+// =============================================================================
+// STRATEGY 21: BREAKOUT + ADD-ON-PULLBACK (combined)
+// Buy the 52-day-high breakout (lot 1), then if it pulls back within N days, ADD a
+// second lot (buy the dip). Catches both the runners AND a better average price on dips.
+//
+// BACKTEST (walk-forward, 22-stock basket): OOS profit factor ~1.23 — positive and the
+// MOST trades, but slightly BELOW buying the breakout alone (~1.26), because the pullback
+// adds are lower-quality and dilute the breakout edge. Real, but not an improvement.
+//
+// Use on the DAILY chart. Long-only. Two entries max per breakout (pyramiding=2).
+// =============================================================================
+strategy("21 Breakout + Pullback Add",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 47,        // ~47% per lot -> ~94% when both lots are on
+     pyramiding           = 2,         // allow breakout lot + pullback add
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.02,
+     slippage             = 2)
+
+// ---------- Inputs ----------
+look     = input.int(52,  "Breakout lookback (days)", group="Signal")
+waitBars = input.int(10,  "Pullback window (bars)",   group="Signal")
+dipPct   = input.float(1.5,"Pullback depth (% below breakout high)", group="Signal", step=0.5)
+trendLen = input.int(200, "Trend SMA (must stay above)", group="Signal")
+atrLen   = input.int(14,  "ATR length",              group="Risk")
+stopATR  = input.float(2.0,"Stop = ATR x (from avg entry)", group="Risk", step=0.5)
+targetPct= input.float(5.0,"Target % (from avg entry)", group="Risk", step=0.5)
+maxHold  = input.int(20,  "Max hold (bars)",         group="Risk")
+useDates = input.bool(false,"Limit backtest dates",  group="Backtest")
+fromDate = input.time(timestamp("2021-07-01"), "From", group="Backtest")
+
+// ---------- Indicators ----------
+trend = ta.sma(close, trendLen)
+atr   = ta.atr(atrLen)
+broke = close > ta.highest(high, look)[1]
+inWin = not useDates or time >= fromDate
+
+// ---------- Lot 1: buy the breakout ----------
+if inWin and broke and strategy.position_size == 0
+    strategy.entry("L", strategy.long)
+
+// ---------- Arm pullback watch, Lot 2: add on the dip ----------
+var float bHigh = na
+var int   bBar  = na
+if broke
+    bHigh := high
+    bBar  := bar_index
+
+armed      = not na(bBar) and (bar_index - bBar) >= 1 and (bar_index - bBar) <= waitBars
+pulledBack = armed and close <= bHigh * (1 - dipPct / 100) and close > trend
+if inWin and pulledBack and strategy.position_size > 0 and strategy.opentrades == 1
+    strategy.entry("L", strategy.long)   // ADD second lot
+    bBar := na
+if not na(bBar) and (bar_index - bBar) > waitBars
+    bBar := na
+
+// ---------- Exit whole position ----------
+if strategy.position_size > 0
+    strategy.exit("Exit", from_entry="L", stop=strategy.position_avg_price - atr * stopATR, limit=strategy.position_avg_price * (1 + targetPct / 100))
+barsHeld = strategy.position_size > 0 ? (bar_index - strategy.opentrades.entry_bar_index(0)) : 0
+if barsHeld >= maxHold
+    strategy.close("L", comment="max hold")
+
+// ---------- Plots ----------
+plot(trend, "SMA200", color=color.new(color.red, 0))
+plot(not na(bHigh) ? bHigh : na, "Breakout high", color=color.new(color.blue, 0), style=plot.style_linebr)
+bgcolor(armed ? color.new(color.yellow, 90) : na)
+plotshape(broke, "breakout BUY", shape.triangleup, location.belowbar, color.new(color.blue, 0), size=size.tiny, text="BO")
+plotshape(pulledBack and strategy.position_size > 0, "pullback ADD", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.small, text="ADD")

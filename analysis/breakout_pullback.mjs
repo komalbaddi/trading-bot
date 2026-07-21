@@ -72,7 +72,8 @@ function stats(tr, from, to) { const t = tr.filter(x => x.t >= from && x.t <= to
   for (const s of UNIVERSE) { const b = await fetchDaily(s); if (b && b.length > 260) { pb.push(...pullback(b)); dr.push(...direct(b)); } process.stdout.write("."); }
   console.log(`\n\nHYPOTHESIS: after a ${LOOK}-day high breakout, price pulls back ${DIP}%+ then rebounds to the high.\n`);
   const show = (name, tr) => { const is = stats(tr, 0, SPLIT), o = stats(tr, SPLIT, 9e18); console.log(`${name.padEnd(34)} | IS: n${is.n} win${is.win.toFixed(0)}% avg${is.avg.toFixed(2)}% PF${is.pf.toFixed(2)} | OOS: n${o.n} win${o.win.toFixed(0)}% avg${o.avg.toFixed(2)}% PF${o.pf.toFixed(2)}`); };
-  show("PULLBACK after breakout (your idea)", pb);
+  show("PULLBACK after breakout (dip only)", pb);
   show("DIRECT breakout buy (baseline)", dr);
-  console.log("\nEdge is real only if OOS PF > 1 with a decent sample.");
+  show("COMBINED (buy breakout + add on pullback)", [...dr, ...pb]);
+  console.log("\nEdge is real only if OOS PF > 1 with a decent sample. Combined = take both entries (half-size each).");
 })();
