@@ -1,0 +1,74 @@
+//@version=5
+// =============================================================================
+// STRATEGY 18: BTC 15-MIN TREND  — ⚠️ UNVALIDATED / NEGATIVE EXPECTANCY ⚠️
+// FOR VERIFICATION ONLY — DO NOT TRADE THIS.
+//
+// A thorough walk-forward sweep (Binance 15m, 2021-2026, fees 0.1%/side) found NO
+// 15-minute BTC config that was profitable out-of-sample. The best in-sample config
+// (EMA 100/200 + regime + 8xATR trail) made +10% in-sample and then LOST -30%
+// out-of-sample. Fees + 15m noise = a money-loser.
+//
+// USE THIS TO SEE IT FOR YOURSELF: on a BTC 15m chart, set the backtest date range to
+// 2021..mid-2023 (looks ok), then mid-2023..now (falls apart). That gap IS overfitting.
+// The real BTC edge is on the DAILY (strat 16) and 6H (strat 17) charts, not 15m.
+// =============================================================================
+strategy("18 BTC 15m Trend (UNVALIDATED - do not trade)",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 95,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.1,       // crypto fee per side — this is what kills 15m trading
+     slippage             = 0)
+
+// ---------- Inputs (best in-sample; still loses out-of-sample) ----------
+fastLen  = input.int(100, "Fast EMA",             group="Signal")
+slowLen  = input.int(200, "Slow EMA",             group="Signal")
+useRegime= input.bool(true,"Regime filter: only long above long EMA", group="Signal")
+regLen   = input.int(400, "Regime EMA",           group="Signal")
+atrLen   = input.int(14,  "ATR length",           group="Risk")
+initMult = input.float(3.0,"Initial stop = ATR x",group="Risk", step=0.5)
+trailMult= input.float(8.0,"Trailing stop = ATR x",group="Risk", step=0.5)
+
+useDates = input.bool(true, "Limit backtest dates (compare IS vs OOS!)", group="Backtest")
+fromDate = input.time(timestamp("2023-07-01"), "From", group="Backtest")
+toDate   = input.time(timestamp("2026-12-31"), "To",   group="Backtest")
+
+// ---------- Indicators ----------
+eF  = ta.ema(close, fastLen)
+eS  = ta.ema(close, slowLen)
+eR  = ta.ema(close, regLen)
+atr = ta.atr(atrLen)
+inWin = not useDates or (time >= fromDate and time <= toDate)
+
+// ---------- Signals ----------
+regimeOK  = not useRegime or close > eR
+longSig   = inWin and ta.crossover(eF, eS) and regimeOK
+crossDown = ta.crossunder(eF, eS)
+
+if longSig and strategy.position_size == 0
+    strategy.entry("L", strategy.long)
+
+// ---------- Exit: chandelier trail + EMA cross-down ----------
+var float hiSinceEntry = na
+var float longStop      = na
+if strategy.position_size > 0
+    if strategy.position_size[1] == 0
+        hiSinceEntry := high
+        longStop     := strategy.position_avg_price - atr * initMult
+    else
+        hiSinceEntry := math.max(hiSinceEntry, high)
+        longStop     := math.max(longStop, hiSinceEntry - atr * trailMult)
+    strategy.exit("Exit", from_entry="L", stop=longStop)
+    if crossDown
+        strategy.close("L", comment="EMA cross down")
+else
+    hiSinceEntry := na
+    longStop     := na
+
+// ---------- Plots ----------
+plot(eF, "EMA fast", color=color.new(color.aqua, 0), linewidth=2)
+plot(eS, "EMA slow", color=color.new(color.orange, 0), linewidth=2)
+plot(useRegime ? eR : na, "Regime EMA", color=color.new(color.gray, 0))
+bgcolor(eF > eS and inWin ? color.new(color.green, 92) : na)
+plotshape(longSig, "BUY", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.tiny)

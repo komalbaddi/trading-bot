@@ -1,0 +1,63 @@
+//@version=5
+// =============================================================================
+// STRATEGY 12: AAPL RSI-2 PULLBACK — signal for a 1-4 day OPTIONS swing
+// The ONLY short-term directional edge on AAPL that survived out-of-sample testing:
+//   ~58-62% win rate, ~4-day holds, buying oversold dips inside an uptrend.
+//
+// USE: run on the AAPL DAILY chart. When a green "BUY" prints, you BUY A CALL
+// (see the options rules in chat / README). When "EXIT" prints, sell the call.
+//
+// Signal (technicals only):
+//   * Regime filter: price above the 200-day SMA (only buy dips in an uptrend)
+//   * Entry: RSI(2) drops below the oversold threshold (a sharp 1-2 day dip)
+//   * Exit:  price closes back above the 5-day SMA (the bounce), or max-hold days
+//
+// This backtests the STOCK signal (direction). The OPTION's P&L can't be backtested
+// here — manage theta/spread with the option-selection rules (ITM, 2-4 wk expiry).
+// =============================================================================
+strategy("12 AAPL RSI2 Options Signal",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 100,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.0,
+     slippage             = 1,
+     pyramiding           = 0)
+
+// ---------- Inputs ----------
+rsiLen   = input.int(2,   "RSI length",          group="Signal")
+rsiBuy   = input.float(10,"Buy when RSI below",  group="Signal", tooltip="10 = classic; 5 = deeper dip, higher quality (fewer trades)")
+trendLen = input.int(200, "Trend SMA (regime)",  group="Signal")
+exitLen  = input.int(5,   "Exit above SMA",      group="Signal")
+maxHold  = input.int(6,   "Max hold (bars)",     group="Signal")
+useDates = input.bool(true,"Limit backtest to 2015+", group="Backtest")
+fromDate = input.time(timestamp("2015-01-01"), "From", group="Backtest")
+
+// ---------- Indicators ----------
+rsi   = ta.rsi(close, rsiLen)
+trend = ta.sma(close, trendLen)
+exSma = ta.sma(close, exitLen)
+inWin = not useDates or time >= fromDate
+
+// ---------- Logic ----------
+upTrend  = close > trend
+longSig  = inWin and upTrend and rsi < rsiBuy
+barsHeld = strategy.position_size > 0 ? (bar_index - strategy.opentrades.entry_bar_index(0)) : 0
+exitSig  = strategy.position_size > 0 and (close > exSma or barsHeld >= maxHold)
+
+if longSig and strategy.position_size == 0
+    strategy.entry("Buy", strategy.long)
+if exitSig
+    strategy.close("Buy", comment="bounce/exit")
+
+// ---------- Alerts (so you can act in real time) ----------
+alertcondition(longSig and strategy.position_size == 0, "AAPL RSI2 BUY", "AAPL RSI2 dip in uptrend — BUY CALL setup")
+alertcondition(exitSig, "AAPL RSI2 EXIT", "AAPL bounced above SMA — SELL CALL")
+
+// ---------- Plots ----------
+plot(trend, "SMA200", color=color.new(color.red, 0), linewidth=2)
+plot(exSma, "SMA5",   color=color.new(color.orange, 0))
+bgcolor(upTrend and inWin ? color.new(color.green, 94) : color.new(color.gray, 94))
+plotshape(longSig and strategy.position_size == 0, "BUY",  shape.triangleup,   location.belowbar, color.new(color.green, 0), size=size.small, text="BUY")
+plotshape(exitSig, "EXIT", shape.triangledown, location.abovebar, color.new(color.red, 0),   size=size.small, text="EXIT")

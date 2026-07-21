@@ -1,0 +1,70 @@
+//@version=5
+// =============================================================================
+// STRATEGY 14: AAPL 30-MIN RSI REVERSION  (walk-forward validated)
+// The ONLY 30-min archetype that survived out-of-sample testing:
+//   Optimized on 2020-2023, forward-tested 2024-2026 -> OOS profit factor 1.53
+//   (better than in-sample), ~42% win, +5.2%, max drawdown only 2.6%.
+//   Trend & breakout archetypes both FAILED out-of-sample; only reversion held.
+//
+// Same edge we found on the daily chart: buy oversold DIPS inside an UPTREND.
+// >>> Use on the AAPL 30-MINUTE chart. <<<
+//
+//   Regime: 30m close above the 200-EMA (uptrend)
+//   Entry : RSI(14) drops below 30 (oversold dip)
+//   Exit  : RSI(14) rises above 55, OR stop at entry - 2xATR
+// For OPTIONS: on entry buy a slightly-ITM call ~1-2 wk expiry; exit on the signal.
+// =============================================================================
+strategy("14 AAPL 30m RSI Reversion",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.0,
+     slippage             = 2,
+     pyramiding           = 0)
+
+// ---------- Inputs (walk-forward optimum) ----------
+rsiLen   = input.int(14,  "RSI length",            group="Signal")
+osLevel  = input.float(30,"Entry: RSI below",      group="Signal")
+exitLevel= input.float(55,"Exit: RSI above",       group="Signal")
+trendLen = input.int(200, "Trend EMA (regime)",    group="Signal")
+
+atrLen   = input.int(14,  "ATR length",            group="Risk")
+atrStop  = input.float(2.0,"Initial stop = ATR x", group="Risk", step=0.1)
+riskPct  = input.float(1.0,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev   = input.float(1.0,"Max leverage",         group="Risk", step=0.5)
+
+useDates = input.bool(false,"Limit backtest dates", group="Backtest")
+fromDate = input.time(timestamp("2020-01-01"), "From", group="Backtest")
+toDate   = input.time(timestamp("2026-12-31"), "To",   group="Backtest")
+
+// ---------- Indicators ----------
+rsi   = ta.rsi(close, rsiLen)
+trend = ta.ema(close, trendLen)
+atr   = ta.atr(atrLen)
+inWin = not useDates or (time >= fromDate and time <= toDate)
+
+// ---------- Logic ----------
+upRegime = close > trend
+longSig  = inWin and upRegime and ta.crossunder(rsi, osLevel)
+
+// ---------- Sizing ----------
+stopDist = atr * atrStop
+riskCash = strategy.equity * (riskPct / 100.0)
+qty      = stopDist > 0 ? math.min(riskCash / stopDist, (strategy.equity * maxLev) / close) : 0
+
+if longSig and strategy.position_size == 0 and qty > 0
+    strategy.entry("L", strategy.long, qty=qty)
+
+if strategy.position_size > 0
+    strategy.exit("L-x", from_entry="L", stop=strategy.position_avg_price - stopDist)
+    if ta.crossover(rsi, exitLevel)
+        strategy.close("L", comment="RSI recovered")
+
+// ---------- Alerts ----------
+alertcondition(longSig, "AAPL 30m RSI dip BUY", "AAPL 30m oversold dip in uptrend — BUY / buy call")
+
+// ---------- Plots ----------
+plot(trend, "EMA200", color=color.new(color.red, 0), linewidth=2)
+bgcolor(upRegime and inWin ? color.new(color.green, 94) : na)
+plotshape(longSig, "BUY", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.small, text="BUY")

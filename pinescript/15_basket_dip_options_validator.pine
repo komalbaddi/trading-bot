@@ -1,0 +1,73 @@
+//@version=5
+// =============================================================================
+// STRATEGY 15: BASKET DIP — options-signal validator
+// Mirrors the options-basket bot's PER-SYMBOL stock signal so you can verify the
+// edge in TradingView's Strategy Tester. (Pine runs one symbol at a time, so add
+// it to each basket name: AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL, AMD, AVGO,
+// NFLX, CRM, JPM — the bot trades the aggregate.)
+//
+// Signal = the validated mean-reversion dip:
+//   Regime : close > 200-SMA (uptrend)
+//   Entry  : RSI(2) < 10  OR  close < lower Bollinger Band(20,2)
+//   Exit   : first GREEN close (close>open)  OR  RSI(2) > 60  OR  max hold bars
+//
+// This validates the STOCK move behind each trade (~72% win in the Node backtest).
+// The OPTION multiplies that move by leverage — that part can't be tested in Pine.
+// Best on the DAILY chart (the bot uses daily bars).
+// =============================================================================
+strategy("15 Basket Dip (options validator)",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 95,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.0,
+     slippage             = 1,
+     pyramiding           = 0)
+
+// ---------- Inputs ----------
+rsiLen   = input.int(2,   "RSI length",            group="Signal")
+osLevel  = input.float(10,"Entry: RSI below",      group="Signal")
+exitRsi  = input.float(60,"Exit: RSI above",       group="Signal")
+useBB    = input.bool(false,"Also trigger on lower Bollinger (optimization: OFF is better)", group="Signal")
+bbLen    = input.int(20,  "Bollinger length",      group="Signal")
+bbMult   = input.float(2.0,"Bollinger std-dev",    group="Signal", step=0.1)
+trendLen = input.int(200, "Trend SMA (regime)",    group="Signal")
+maxHold  = input.int(4,   "Max hold (bars)",       group="Signal", tooltip="Node backtest used 4; the live bot uses 6")
+
+useDates = input.bool(true, "Limit backtest to realistic era (REQUIRED — avoids 1980s penny-price artifact)", group="Backtest")
+fromDate = input.time(timestamp("2015-01-01"), "From", group="Backtest")
+toDate   = input.time(timestamp("2026-12-31"), "To",   group="Backtest")
+
+// ---------- Indicators ----------
+rsi   = ta.rsi(close, rsiLen)
+trend = ta.sma(close, trendLen)
+basis = ta.sma(close, bbLen)
+dev   = bbMult * ta.stdev(close, bbLen)
+lower = basis - dev
+upper = basis + dev
+inWin = not useDates or (time >= fromDate and time <= toDate)
+
+// ---------- Logic ----------
+upRegime = close > trend
+dip      = rsi < osLevel or (useBB and close < lower)
+longSig  = inWin and upRegime and dip
+
+if longSig and strategy.position_size == 0
+    strategy.entry("Dip", strategy.long)
+
+barsHeld = strategy.position_size > 0 ? (bar_index - strategy.opentrades.entry_bar_index(0)) : 0
+exitSig  = strategy.position_size > 0 and (close > open or rsi > exitRsi or barsHeld >= maxHold)
+if exitSig
+    strategy.close("Dip", comment="bounce/exit")
+
+// ---------- Alerts ----------
+alertcondition(longSig and strategy.position_size == 0, "Basket dip BUY", "Dip in uptrend — buy call setup")
+
+// ---------- Plots ----------
+plot(trend, "SMA200", color=color.new(color.red, 0), linewidth=2)
+p1 = plot(upper, "BB upper", color=color.new(color.blue, 60))
+p2 = plot(lower, "BB lower", color=color.new(color.blue, 60))
+fill(p1, p2, color=color.new(color.blue, 94))
+bgcolor(upRegime and inWin ? color.new(color.green, 94) : na)
+plotshape(longSig and strategy.position_size == 0, "BUY", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.small, text="BUY")

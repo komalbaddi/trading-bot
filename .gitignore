@@ -11,6 +11,7 @@ node_modules/
 
 # local tooling config (not needed in the repo)
 .claude/
+.mcp.json
 
 # NOTE: analysis/swing_state.json IS tracked on purpose — the cloud bot commits it
 # back each run so trailing-stop state persists between runs.

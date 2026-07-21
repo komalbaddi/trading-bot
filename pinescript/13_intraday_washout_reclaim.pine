@@ -1,0 +1,91 @@
+//@version=5
+// =============================================================================
+// STRATEGY 13: INTRADAY "WASHOUT RECLAIM" (AAPL) — signal for a fast options scalp
+// The least-bad, evidence-aligned intraday setup: mean-reversion WITH confirmation
+// (not momentum chasing, which failed every test). Buy a sharp intraday flush ONLY
+// after it reclaims VWAP, inside a daily uptrend. Fast exit, hard stop, EOD flat.
+//
+// >>> HONEST WARNING: this is a RISK-MANAGED FRAMEWORK, not a proven edge. Our testing
+// found NO reliable intraday edge on AAPL. Verify it here yourself — expect it to be
+// near break-even to negative after real option spreads. Use tiny size. Paper only.
+//
+// Recommended chart: AAPL 5-minute.
+// Setup: (1) Daily uptrend (price > daily 200-SMA)  (2) RSI flush to oversold recently
+//        (3) price crosses back ABOVE VWAP (the reclaim = bounce confirmed) -> BUY
+// Exit:  target = Reward:Risk x risk, stop = washout low (or ATR), flat by the close.
+// =============================================================================
+strategy("13 Intraday Washout Reclaim (AAPL)",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.0,
+     slippage             = 2,          // keep — intraday costs are real (options far worse)
+     pyramiding           = 0)
+
+// ---------- Inputs ----------
+rsiLen    = input.int(7,   "RSI length",            group="Signal")
+osLevel   = input.float(20,"Oversold level (flush)",group="Signal")
+reWindow  = input.int(6,   "Reclaim within N bars of the flush", group="Signal")
+
+htfTrend  = input.timeframe("D", "Trend timeframe", group="Trend filter")
+trendLen  = input.int(200, "Trend SMA length",      group="Trend filter")
+
+atrLen    = input.int(14,  "ATR length",            group="Risk")
+useSwingStop = input.bool(true,"Stop at the washout low (else ATR)", group="Risk")
+atrMult   = input.float(1.5,"ATR stop x",           group="Risk", step=0.1)
+rr        = input.float(1.5,"Reward:Risk target",   group="Risk", step=0.1)
+riskPct   = input.float(1.0,"Risk % of equity per trade", group="Risk", step=0.1)
+maxLev    = input.float(1.0,"Max leverage",         group="Risk", step=0.5)
+
+sess      = input.session("0930-1600","Session", group="Session")
+tz        = input.string("America/New_York","Timezone", group="Session")
+skipMin   = input.int(15,  "Skip first N min (noise)", group="Session")
+maxTrades = input.int(2,   "Max entries per day",   group="Session")
+
+// ---------- Indicators ----------
+rsi     = ta.rsi(close, rsiLen)
+vwapVal = ta.vwap(hlc3)
+atr     = ta.atr(atrLen)
+htfUp   = request.security(syminfo.tickerid, htfTrend, close > ta.sma(close, trendLen), lookahead=barmerge.lookahead_off)
+
+// ---------- Session handling ----------
+inSess     = not na(time(timeframe.period, sess, tz)) and timeframe.isintraday
+newSession = inSess and not inSess[1]
+sessEnd    = inSess[1] and not inSess
+var int startT = na
+var int tradesToday = 0
+if newSession
+    startT := time
+    tradesToday := 0
+afterOpen = inSess and not na(startT) and (time - startT) >= skipMin * 60 * 1000
+
+// ---------- Setup logic ----------
+flushedRecently = ta.barssince(rsi < osLevel) <= reWindow      // a sharp oversold flush just happened
+reclaim         = ta.crossover(close, vwapVal)                  // price reclaims VWAP = bounce confirmed
+longSig = htfUp and inSess and afterOpen and flushedRecently and reclaim and tradesToday < maxTrades
+
+// ---------- Orders ----------
+swingLow = ta.lowest(low, reWindow + 2)
+stopPx   = useSwingStop ? math.min(swingLow, close - atr * 0.2) : close - atr * atrMult
+riskPer  = close - stopPx
+riskCash = strategy.equity * (riskPct / 100.0)
+qty      = riskPer > 0 ? math.min(riskCash / riskPer, (strategy.equity * maxLev) / close) : 0
+
+if longSig and strategy.position_size == 0 and qty > 0
+    strategy.entry("L", strategy.long, qty=qty)
+    strategy.exit("L-x", from_entry="L", stop=stopPx, limit=close + riskPer * rr)
+    tradesToday += 1
+
+if sessEnd
+    strategy.close_all(comment="EOD flat")
+
+// ---------- Alerts ----------
+alertcondition(longSig, "Washout Reclaim BUY", "AAPL washout reclaimed VWAP in uptrend — scalp long / buy call")
+
+// ---------- Plots ----------
+plot(vwapVal, "VWAP", color=color.new(color.purple, 0), linewidth=2)
+bgcolor(htfUp and inSess ? color.new(color.green, 94) : na)
+bgcolor(not inSess ? color.new(color.gray, 94) : na)
+plotshape(longSig, "BUY", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.small, text="BUY")
+plotshape(rsi < osLevel and inSess, "flush", shape.circle, location.belowbar, color.new(color.orange, 40), size=size.tiny)
