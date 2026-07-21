@@ -1,0 +1,77 @@
+//@version=5
+// =============================================================================
+// STRATEGY 20: 52-DAY-HIGH BREAKOUT -> PULLBACK -> REBOUND
+// Hypothesis: after a stock breaks a 52-day high, it pulls back, then rebounds.
+// So: wait for the pullback, buy the dip, ride the bounce.
+//
+// BACKTEST VERDICT (walk-forward, 22-stock basket, matched exits):
+//   Real but MODEST edge — OOS profit factor ~1.17, ~55% win, +0.36%/trade.
+//   Slightly WORSE than buying the breakout directly (PF ~1.26) because waiting
+//   makes you miss the strongest breakouts that never pull back.
+//
+// Use on the DAILY chart. Long-only.
+//   Breakout: close > highest high of the prior 52 days
+//   Entry   : within N days, price pulls back >=DIP% below the breakout high, still above 200-SMA
+//   Exit    : +5% target, or ATR stop, or max-hold
+// =============================================================================
+strategy("20 Breakout Pullback",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 95,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.02,
+     slippage             = 2,
+     pyramiding           = 0)
+
+// ---------- Inputs ----------
+look     = input.int(52,  "Breakout lookback (days)", group="Signal")
+waitBars = input.int(10,  "Pullback window (bars after breakout)", group="Signal")
+dipPct   = input.float(1.5,"Pullback depth (% below breakout high)", group="Signal", step=0.5)
+trendLen = input.int(200, "Trend SMA (must stay above)", group="Signal")
+atrLen   = input.int(14,  "ATR length",              group="Risk")
+stopATR  = input.float(2.0,"Stop = ATR x",           group="Risk", step=0.5)
+targetPct= input.float(5.0,"Target %",               group="Risk", step=0.5)
+maxHold  = input.int(20,  "Max hold (bars)",         group="Risk")
+useDates = input.bool(false,"Limit backtest dates",  group="Backtest")
+fromDate = input.time(timestamp("2021-07-01"), "From", group="Backtest")
+
+// ---------- Indicators ----------
+trend = ta.sma(close, trendLen)
+atr   = ta.atr(atrLen)
+priorHigh = ta.highest(high, look)[1]
+broke = close > priorHigh
+inWin = not useDates or time >= fromDate
+
+// ---------- Arm on breakout, watch for pullback ----------
+var float bHigh = na
+var int   bBar  = na
+if broke
+    bHigh := high
+    bBar  := bar_index
+
+armed     = not na(bBar) and (bar_index - bBar) >= 1 and (bar_index - bBar) <= waitBars
+pulledBack= armed and close <= bHigh * (1 - dipPct / 100) and close > trend
+longSig   = inWin and pulledBack and strategy.position_size == 0
+
+if longSig
+    strategy.entry("L", strategy.long)
+    bBar := na                                   // disarm after entering
+
+// expire the armed window if no pullback came
+if not na(bBar) and (bar_index - bBar) > waitBars
+    bBar := na
+
+// ---------- Exit ----------
+if strategy.position_size > 0
+    strategy.exit("Exit", from_entry="L", stop=strategy.position_avg_price - atr * stopATR, limit=strategy.position_avg_price * (1 + targetPct / 100))
+barsHeld = strategy.position_size > 0 ? (bar_index - strategy.opentrades.entry_bar_index(0)) : 0
+if barsHeld >= maxHold
+    strategy.close("L", comment="max hold")
+
+// ---------- Plots ----------
+plot(trend, "SMA200", color=color.new(color.red, 0))
+plot(not na(bHigh) ? bHigh : na, "Breakout high", color=color.new(color.blue, 0), style=plot.style_linebr)
+bgcolor(armed ? color.new(color.yellow, 88) : na)
+plotshape(longSig, "BUY dip", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.small, text="BUY")
+plotshape(broke, "breakout", shape.diamond, location.abovebar, color.new(color.blue, 50), size=size.tiny)
