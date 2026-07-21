@@ -114,6 +114,10 @@ async function processSymbol(sym, equity, state, avail) {
   if (!pos) {
     if (state[sym]) delete state[sym];                            // clean stale state
     if (upRegime && b.c > priorHigh) {
+      // SAFETY: if a buy order is already pending (unfilled, e.g. placed while market closed),
+      // do NOT place another — this prevents the duplicate-order bug (the 3x JNJ issue).
+      const openOrders = await api(TRADE, "GET", `/v2/orders?status=open&symbols=${sym}&limit=10`);
+      if (openOrders && openOrders.length > 0) { console.log(`[${sym}] breakout but an order is already pending — skip (no duplicate)`); return; }
       const stopDist = a[i] * ATR_INIT;
       const allocCap = (equity * BUDGET_PCT / 100) / SLOTS;                  // per position, within this bot's budget
       const notionalCap = Math.min(equity * MAX_LEV, allocCap, avail.cash);  // never exceed available cash
