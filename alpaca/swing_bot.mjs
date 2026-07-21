@@ -125,8 +125,15 @@ async function processSymbol(sym, equity, state, avail) {
       if (qty < 1) { console.log(`[${sym}] breakout but no capital slot free (avail cash $${avail.cash.toFixed(0)})`); return; }
       await api(TRADE, "POST", "/v2/orders", { symbol: sym, qty: String(qty), side: "buy", type: "market", time_in_force: "day" });
       avail.cash -= qty * b.c;                                               // reserve the capital for this run
-      state[sym] = { entryDate: b.d, hi: b.h, stop: +(b.c - stopDist).toFixed(2), stopOrderId: null };
-      console.log(`[${sym}] ENTER breakout: buy ${qty} @~${b.c.toFixed(2)} (>50d high ${priorHigh.toFixed(2)}), init stop ${state[sym].stop}. Stop order placed next run.`);
+      const initStop = +(b.c - stopDist).toFixed(2);
+      // Place the protective stop IMMEDIATELY once the buy fills (bot runs at the open, so
+      // market orders on liquid names fill in ~1s) — removes the old 1-day unprotected window.
+      let filled = null;
+      for (let t = 0; t < 6 && !filled; t++) { await new Promise(r => setTimeout(r, 1000)); const p2 = await api(TRADE, "GET", `/v2/positions/${sym}`); if (p2 && parseFloat(p2.qty) > 0) filled = p2; }
+      let stopOrderId = null;
+      if (filled) { try { const o = await placeStop(sym, Math.floor(parseFloat(filled.qty)), initStop); stopOrderId = o?.id || null; } catch (e) { console.log(`   stop-order error: ${e.message}`); } }
+      state[sym] = { entryDate: b.d, hi: b.h, stop: initStop, stopOrderId };
+      console.log(`[${sym}] ENTER breakout: buy ${qty} @~${b.c.toFixed(2)} (>50d high ${priorHigh.toFixed(2)}), init stop ${initStop} — protective stop ${filled ? "placed NOW" : "pending fill (next run)"}.`);
     } else {
       console.log(`[${sym}] flat, no signal (regime ${upRegime ? "UP" : "down"}, close ${b.c.toFixed(2)} vs 50d high ${priorHigh.toFixed(2)})`);
     }

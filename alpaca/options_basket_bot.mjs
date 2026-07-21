@@ -98,7 +98,9 @@ async function pickCall(sym, spot) {
   // or an open option position (prevents the duplicate-order bug seen on the swing bot).
   const openOrders = await api(TRADE, "GET", "/v2/orders?status=open&limit=500") || [];
   const openPositions = await api(TRADE, "GET", "/v2/positions") || [];
-  const engaged = sym => openOrders.some(o => o.symbol.startsWith(sym)) || openPositions.some(p => p.symbol.startsWith(sym) && p.symbol.length > sym.length);
+  // only OPTION orders/positions block (symbol longer than the ticker = OCC contract);
+  // a swing-bot STOCK order/position on the same underlying must NOT block an option trade.
+  const engaged = sym => openOrders.some(o => o.symbol.startsWith(sym) && o.symbol.length > sym.length) || openPositions.some(p => p.symbol.startsWith(sym) && p.symbol.length > sym.length);
   const openCount = Object.keys(state).length;
   console.log(`\n=== OPTIONS BASKET BOT (${DRY_RUN ? "DRY-RUN / log only" : "LIVE PAPER"}) ===`);
   console.log(`Equity $${equity.toFixed(0)} | open positions ${openCount}/${MAX_POSITIONS} | premium/trade ${PREMIUM_PCT}% ($${(equity * PREMIUM_PCT / 100).toFixed(0)})\n`);
@@ -109,12 +111,19 @@ async function pickCall(sym, spot) {
       const bars = await getDaily(sym); const c = bars.map(b => b.c); const r2 = rsiW(c, 2); const i = bars.length - 1;
       const st = state[sym];
       const held = bars.filter(b => b.d > st.entryDate).length;
-      const exit = (bars[i].c > bars[i].o) || (r2[i] > 60) || (held >= MAX_HOLD_DAYS);
+      // OPTION-LEVEL risk control: -50% stop / +50% target on the option's own P&L
+      const optPos = openPositions.find(p => p.symbol === st.optSymbol);
+      const plpc = optPos ? +optPos.unrealized_plpc : null;
+      const hitStop = plpc != null && plpc <= -0.50;
+      const hitTarget = plpc != null && plpc >= 0.50;
+      const stockExit = (bars[i].c > bars[i].o) || (r2[i] > 60) || (held >= MAX_HOLD_DAYS);
+      const exit = hitStop || hitTarget || stockExit;
       if (exit) {
-        console.log(`SELL  ${sym}: exit signal (green close / RSI2>60 / max hold). Contract ${st.optSymbol} x${st.contracts}. Held ${held}d.`);
+        const why = hitStop ? "OPTION -50% STOP" : hitTarget ? "OPTION +50% TARGET" : "stock exit (green/RSI>60/maxhold)";
+        console.log(`SELL  ${sym}: ${why}. Contract ${st.optSymbol} x${st.contracts}${plpc != null ? ` (opt P/L ${(plpc * 100).toFixed(0)}%)` : ""}. Held ${held}d.`);
         if (!DRY_RUN && st.live) { try { await api(TRADE, "POST", "/v2/orders", { symbol: st.optSymbol, qty: String(st.contracts), side: "sell", type: "market", time_in_force: "day" }); } catch (e) { console.log(`   sell order error: ${e.message}`); } }
         delete state[sym];
-      } else console.log(`HOLD  ${sym}: ${st.optSymbol} x${st.contracts} (held ${held}d, waiting for bounce)`);
+      } else console.log(`HOLD  ${sym}: ${st.optSymbol} x${st.contracts} (held ${held}d, opt P/L ${plpc != null ? (plpc * 100).toFixed(0) + "%" : "n/a"})`);
     } catch (e) { console.log(`[${sym}] exit-check error: ${e.message}`); }
   }
 
