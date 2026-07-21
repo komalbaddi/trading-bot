@@ -21,6 +21,8 @@ jobs:
           APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
         run: |
           node alpaca/daily_report.mjs | tee report.txt
+          printf '\n\n' >> report.txt
+          node alpaca/performance_report.mjs | tee -a report.txt
 
       - name: Email the report
         uses: dawidd6/action-send-mail@v3
