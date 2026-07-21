@@ -1,0 +1,36 @@
+name: Daily Bot Report (email)
+
+# Runs the 3-bot report daily and emails it to you. Cloud-based (works with PC off).
+on:
+  schedule:
+    - cron: "30 2 * * *"    # 02:30 UTC = 08:00 IST
+  workflow_dispatch: {}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate report
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+        run: |
+          node alpaca/daily_report.mjs | tee report.txt
+
+      - name: Email the report
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "📊 Daily Trading Bot Report"
+          to: ${{ secrets.MAIL_TO }}
+          from: Trading Bots <${{ secrets.MAIL_USERNAME }}>
+          body: file://report.txt
