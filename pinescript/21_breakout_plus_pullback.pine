@@ -60,8 +60,7 @@ if not na(bBar) and (bar_index - bBar) > waitBars
 // ---------- Exit whole position ----------
 if strategy.position_size > 0
     strategy.exit("Exit", from_entry="L", stop=strategy.position_avg_price - atr * stopATR, limit=strategy.position_avg_price * (1 + targetPct / 100))
-barsHeld = strategy.position_size > 0 ? (bar_index - strategy.opentrades.entry_bar_index(0)) : 0
-if barsHeld >= maxHold
+if strategy.position_size > 0 and (bar_index - strategy.opentrades.entry_bar_index(0)) >= maxHold
     strategy.close("L", comment="max hold")
 
 // ---------- Plots ----------
