@@ -43,7 +43,13 @@ async function allFills() {
 
   // per-symbol: buyCost, sellProceeds, count; + current market value
   const sym = {};
-  for (const f of fills) { const s = sym[f.symbol] ||= { buy: 0, sell: 0, nBuy: 0, nSell: 0, bot: botOf(f.symbol, "") }; const val = +f.price * +f.qty; if (f.side === "buy") { s.buy += val; s.nBuy++; } else { s.sell += val; s.nSell++; } }
+  for (const f of fills) {
+    const b = botOf(f.symbol, "");
+    const mult = b === "OPTIONS" ? 100 : 1;   // option contracts represent 100 shares — must scale price*qty
+    const s = sym[f.symbol] ||= { buy: 0, sell: 0, nBuy: 0, nSell: 0, bot: b };
+    const val = +f.price * +f.qty * mult;
+    if (f.side === "buy") { s.buy += val; s.nBuy++; } else { s.sell += val; s.nSell++; }
+  }
   for (const p of positions) { const s = sym[p.symbol] ||= { buy: 0, sell: 0, nBuy: 0, nSell: 0, bot: botOf(p.symbol, p.asset_class) }; s.mv = +p.market_value; s.bot = botOf(p.symbol, p.asset_class); }
 
   const bots = { SWING: [], OPTIONS: [], BTC: [] };
